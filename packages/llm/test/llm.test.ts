@@ -243,3 +243,26 @@ describe('thinking models (Gemma 4, Qwen 3.x on Ollama)', () => {
     expect('reasoning_effort' in body).toBe(false);
   });
 });
+
+describe('Test connection never hangs', () => {
+  it('gives up with an explanation when the server never answers', async () => {
+    // Like Ollama while a big model is still loading: no response at all.
+    const fetchImpl = ((_u: string, init: RequestInit) =>
+      new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(init.signal!.reason)))) as unknown as typeof fetch;
+    const { OpenAICompatibleProvider } = await import('../src/index.js');
+    const p = new OpenAICompatibleProvider({ id: 'ollama', baseUrl: 'http://localhost:11434/v1', model: 'gemma4:12b', fetchImpl, testTimeoutMs: 50 });
+    const t0 = Date.now();
+    const r = await p.test();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/No answer in time/);
+  });
+
+  it('reports an empty reply instead of claiming success', async () => {
+    const fetchImpl = (async () => sseResponse([JSON.stringify({ choices: [{ delta: { content: '' } }] }), '[DONE]'])) as unknown as typeof fetch;
+    const p = createProvider({ ...DEFAULT_SETTINGS.llm, provider: 'ollama', model: 'llama3.2', baseUrl: 'http://localhost:11434/v1' }, undefined, fetchImpl)!;
+    const r = await p.test();
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/empty reply/);
+  });
+});
