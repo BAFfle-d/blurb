@@ -177,7 +177,12 @@ describe('GGUF scan', () => {
     writeFileSync(path.join(root, 'a', 'mmproj-f16.gguf'), big);
     writeFileSync(path.join(root, 'a', 'small.gguf'), Buffer.alloc(100));
     mkdirSync(path.join(root, 'snap'));
-    symlinkSync(path.join(root, 'a', 'tiny-model-Q4_K_M.gguf'), path.join(root, 'snap', 'linked.gguf'));
+    try {
+      symlinkSync(path.join(root, 'a', 'tiny-model-Q4_K_M.gguf'), path.join(root, 'snap', 'linked.gguf'));
+    } catch {
+      // Windows without Developer Mode can't create symlinks. The expected
+      // result is identical either way (the link must be de-duplicated).
+    }
     const found = await scanForGguf([{ dir: root, source: 'test' }]);
     expect(found.map((f) => f.name).sort()).toEqual(['big-00001-of-00002.gguf', 'tiny-model-Q4_K_M.gguf']);
   });
