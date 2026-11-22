@@ -12,7 +12,7 @@
  * powers": it isn't a prompt rule the model could talk itself out of, it's
  * a closed instruction set.
  */
-import { OBJECT_DEFS, WORLD } from './catalog.js';
+import { OBJECT_DEFS, WORLD, zoneAt } from './catalog.js';
 import { clampShape, normalizeColor } from './palettes.js';
 import type {
   CapabilitySet,
@@ -199,7 +199,7 @@ export function validateOp(
       if (typeof raw.x !== 'number' || !Number.isFinite(raw.x)) return reject('x must be a number');
       const def = OBJECT_DEFS[o.kind];
       const x = Math.round(Math.min(WORLD.width - def.width, Math.max(0, raw.x)));
-      const zone = x + def.width / 2 < WORLD.doorX ? 'house' : 'yard';
+      const zone = zoneAt(x + def.width / 2);
       if (!def.zones.includes(zone)) return reject(`a ${def.label.toLowerCase()} has to stay in the ${def.zones.join('/')}`);
       return { op, target: o.id, x };
     }
@@ -231,7 +231,7 @@ export function validateOp(
       const rawX = typeof raw.x === 'number' && Number.isFinite(raw.x) ? raw.x : WORLD.doorX + 40;
       let x = Math.round(Math.min(WORLD.width - def.width, Math.max(0, rawX)));
       // Snap into an allowed zone.
-      const zone = x + def.width / 2 < WORLD.doorX ? 'house' : 'yard';
+      const zone = zoneAt(x + def.width / 2);
       if (!def.zones.includes(zone)) x = def.zones[0] === 'house' ? WORLD.doorX - def.width - 8 : WORLD.doorX + 12;
       const color = raw.color !== undefined ? normalizeColor(raw.color) ?? undefined : undefined;
       return { op, kind: kind as ObjectKind, x, color };

@@ -35,6 +35,8 @@ export const ACTIVITIES = [
   'eating',
   'reading',
   'watching',
+  'jumping',
+  'sliding',
   'coding',
   'playing',
   'building',
@@ -204,6 +206,8 @@ export const OBJECT_KINDS = [
   'lamp',
   'rug',
   'plant_pot',
+  'trampoline',
+  'slide',
   'tablet',
   'pillow',
   'blocks',
@@ -420,6 +424,7 @@ export const CAPABILITIES = [
   'chase_cursor',
   'sit_on_windows',
   'screen_questions',
+  'jump',
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 

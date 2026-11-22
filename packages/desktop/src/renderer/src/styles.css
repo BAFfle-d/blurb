@@ -38,6 +38,12 @@ button { cursor: pointer; }
 .obj-menu button { background: #2f2342; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
 .obj-menu .danger, .danger { background: #4a1f2a !important; border-color: #7a2a3a !important; color: #ffc9d0; }
 .obj-menu { max-height: calc(100% - 16px); overflow-y: auto; }
+.room-nav { position: absolute; top: 8px; left: 8px; right: 52px; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; }
+.room-nav button { pointer-events: auto; font-size: 0.72rem; padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.25); background: rgba(20,14,30,0.62); color: #f6eefc; }
+.room-nav button:hover { background: rgba(59,44,84,0.9); }
+.room-nav button.here { background: rgba(255,59,92,0.85); border-color: #ff3b5c; }
+.room-nav button.follow { margin-left: auto; }
+.room-nav button.follow.on { background: rgba(127,224,176,0.25); border-color: #7fe0b0; }
 .shelf-menu { display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem; }
 .shelf-list { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
 .shelf-list li { line-height: 1.25; }

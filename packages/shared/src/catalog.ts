@@ -13,13 +13,42 @@ import type {
 
 /** Internal world resolution. Renderers scale this up with nearest-neighbor. */
 export const WORLD = {
-  width: 480,
+  width: 1180,
   height: 270,
   floorY: 244,
   ceilingY: 96,
-  doorX: 300,
-  maxObjects: 48,
+  /** Back door: back yard | storage room. */
+  backDoorX: 140,
+  /** Open doorway: storage room | main room. */
+  houseX: 300,
+  /** Front door: main room | front yard. */
+  doorX: 600,
+  /** Front yard | field (with the playground). */
+  fieldX: 780,
+  /** How much of the world the camera shows at once. */
+  viewWidth: 480,
+  /** Saves from the old two-room world are shifted right by this much. */
+  legacyShift: 300,
+  legacyWidth: 480,
+  maxObjects: 64,
 } as const;
+
+export type AreaId = 'backyard' | 'storage' | 'house' | 'yard' | 'field';
+
+export const AREAS: Array<{ id: AreaId; label: string; from: number; to: number; indoor: boolean }> = [
+  { id: 'backyard', label: 'Back yard', from: 0, to: WORLD.backDoorX, indoor: false },
+  { id: 'storage', label: 'Storage room', from: WORLD.backDoorX, to: WORLD.houseX, indoor: true },
+  { id: 'house', label: 'House', from: WORLD.houseX, to: WORLD.doorX, indoor: true },
+  { id: 'yard', label: 'Front yard', from: WORLD.doorX, to: WORLD.fieldX, indoor: false },
+  { id: 'field', label: 'Field', from: WORLD.fieldX, to: WORLD.width, indoor: false },
+];
+
+export function areaAt(x: number) {
+  return AREAS.find((a) => x >= a.from && x < a.to) ?? (x < 0 ? AREAS[0] : AREAS[AREAS.length - 1]);
+}
+
+/** Outdoor spans, for things that wash up outside. */
+export const OUTDOOR_SPANS = AREAS.filter((a) => !a.indoor).map((a) => [a.from, a.to] as const);
 
 export type NeedDelta = Partial<Record<keyof Needs, number>>;
 
@@ -126,6 +155,16 @@ export const OBJECT_DEFS: Record<ObjectKind, ObjectDef> = {
     kind: 'plant_pot', label: 'Potted plant', width: 12, height: 20, defaultColor: '#d2734a', zones: ['house', 'yard'],
     recipe: { pebble: 2, leaf: 1 },
   },
+  trampoline: {
+    kind: 'trampoline', label: 'Trampoline', width: 44, height: 12, defaultColor: '#3f7fdc', zones: ['yard'],
+    activity: 'jumping', duration: 10, effect: { boredom: -7, energy: -1.2, social: -0.5 },
+    recipe: { wire: 2, bioplastic: 2, stick: 4 },
+  },
+  slide: {
+    kind: 'slide', label: 'Slide', width: 46, height: 30, defaultColor: '#e8303a', zones: ['yard'],
+    activity: 'sliding', duration: 12, effect: { boredom: -6, energy: -0.8 },
+    recipe: { stick: 6, bioplastic: 2 },
+  },
   tablet: {
     kind: 'tablet', label: 'E-reader / movie tablet', width: 10, height: 7, defaultColor: '#3a3f4b', zones: ['house', 'yard'],
     activity: 'reading', duration: 22, effect: { boredom: -4, curiosity: -3.5, energy: -0.2 },
@@ -186,8 +225,9 @@ export const TOYS: Record<ToyKind, { label: string; emoji: string }> = {
   plushie: { label: 'Squeak the plushie', emoji: '🧸' },
 };
 
+/** 'house' = any indoor area, 'yard' = any outdoor area (what object placement rules use). */
 export function zoneAt(x: number): Zone {
-  return x < WORLD.doorX ? 'house' : 'yard';
+  return areaAt(x).indoor ? 'house' : 'yard';
 }
 
 let seq = 0;
@@ -210,29 +250,45 @@ function obj(id: string, kind: ObjectKind, x: number, extra: Partial<WorldObject
   };
 }
 
-/** The starting house + yard. Ids are stable so programs can reference them. */
-export function defaultWorldObjects(): WorldObject[] {
+/** Objects in the areas added with the bigger world (back yard, field + playground). */
+export function newAreaObjects(): WorldObject[] {
   return [
-    obj('rug-1', 'rug', 96),
-    obj('bookshelf-1', 'bookshelf', 14),
-    obj('lamp-1', 'lamp', 54),
-    obj('bed-1', 'bed', 70),
-    obj('computer-1', 'computer', 140),
-    obj('drop_box-1', 'drop_box', 196),
-    obj('food_bowl-1', 'food_bowl', 226, { data: { servings: 2 } }),
-    obj('plant_pot-1', 'plant_pot', 252),
-    obj('ball-1', 'ball', 166),
-    obj('comm_box-1', 'comm_box', 310),
-    obj('workbench-1', 'workbench', 330),
-    obj('tree-1', 'tree', 380),
-    obj('bush-1', 'bush', 440),
-    obj('flowers-1', 'flowers', 424),
-    obj('yarn-1', 'yarn', 274),
-    obj('pillow-1', 'pillow', 116),
-    obj('plushie-1', 'plushie', 118),
-    obj('tablet-1', 'tablet', 104),
-    obj('resource-1', 'resource', 365, { data: { resource: 'pebble' }, color: RESOURCE_COLORS.pebble }),
-    obj('resource-2', 'resource', 470, { data: { resource: 'stick' }, color: RESOURCE_COLORS.stick }),
+    obj('flowers-2', 'flowers', 18),
+    obj('bush-2', 'bush', 64),
+    obj('plant_pot-2', 'plant_pot', 112),
+    obj('trampoline-1', 'trampoline', 860),
+    obj('slide-1', 'slide', 960),
+    obj('tree-2', 'tree', 1090),
+    obj('flowers-3', 'flowers', 1050),
+    obj('resource-3', 'resource', 1140, { data: { resource: 'fluff' }, color: RESOURCE_COLORS.fluff }),
+  ];
+}
+
+/** The starting world. Ids are stable so programs can reference them. */
+export function defaultWorldObjects(): WorldObject[] {
+  const S = WORLD.legacyShift; // the original rooms keep their layout, shifted right
+  return [
+    obj('rug-1', 'rug', 96 + S),
+    obj('bookshelf-1', 'bookshelf', 14 + S),
+    obj('lamp-1', 'lamp', 54 + S),
+    obj('bed-1', 'bed', 70 + S),
+    obj('computer-1', 'computer', 140 + S),
+    obj('drop_box-1', 'drop_box', 196 + S),
+    obj('food_bowl-1', 'food_bowl', 226 + S, { data: { servings: 2 } }),
+    obj('plant_pot-1', 'plant_pot', 252 + S),
+    obj('ball-1', 'ball', 166 + S),
+    obj('comm_box-1', 'comm_box', 310 + S),
+    obj('workbench-1', 'workbench', 330 + S),
+    obj('tree-1', 'tree', 380 + S),
+    obj('bush-1', 'bush', 440 + S),
+    obj('flowers-1', 'flowers', 424 + S),
+    obj('yarn-1', 'yarn', 274 + S),
+    obj('pillow-1', 'pillow', 116 + S),
+    obj('plushie-1', 'plushie', 118 + S),
+    obj('tablet-1', 'tablet', 104 + S),
+    obj('resource-1', 'resource', 365 + S, { data: { resource: 'pebble' }, color: RESOURCE_COLORS.pebble }),
+    obj('resource-2', 'resource', 470 + S, { data: { resource: 'stick' }, color: RESOURCE_COLORS.stick }),
+    ...newAreaObjects(),
   ];
 }
 
@@ -252,6 +308,7 @@ export const DEFAULT_CAPABILITIES: CapabilitySet = {
   chase_cursor: true,
   sit_on_windows: true,
   screen_questions: true,
+  jump: true,
 };
 
 export const CAPABILITY_LABELS: Record<keyof CapabilitySet, string> = {
@@ -268,6 +325,7 @@ export const CAPABILITY_LABELS: Record<keyof CapabilitySet, string> = {
   chase_cursor: 'Chase your cursor',
   sit_on_windows: 'Sit on top of app windows',
   screen_questions: 'Answer questions about a screenshot you share',
+  jump: 'Jump on the trampoline and play on the slide',
 };
 
 export const DEFAULT_PERSONA = `You are {name}, a small, glossy, squishy blob who lives in a cozy pixel house with a little yard.

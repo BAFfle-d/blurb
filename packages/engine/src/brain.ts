@@ -52,6 +52,10 @@ export function interactionX(o: WorldObject): number {
       return o.x + 21;
     case 'tablet':
       return o.x + 5;
+    case 'trampoline':
+      return o.x + 22;
+    case 'slide':
+      return o.x + 5;
     case 'bookshelf':
       return o.x + def.width + 10;
     case 'tree':
@@ -100,6 +104,11 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
       case 'computer':
         s = ctx.sinceCoding < 150 ? -Infinity : n.curiosity * 0.5 + n.boredom * 0.35;
         reason = 'wants to tinker';
+        break;
+      case 'trampoline':
+      case 'slide':
+        if (caps.jump) s = n.boredom * 0.9 + (n.energy > 35 ? 8 : -40);
+        reason = o.kind === 'trampoline' ? 'wants to bounce' : 'wants to slide';
         break;
       case 'tablet':
         // Read when curious, watch a movie when bored; a little novelty bonus.
@@ -173,6 +182,8 @@ export const PHRASES: Record<string, string[]> = {
   sleep: ['Nap time…', 'Just resting my eyes…', 'Zzz… five more minutes…'],
   eat: ['Nom nom nom!', 'Delicious!', 'Crunchy!'],
   read: ['Ooh, a book about clouds!', 'Did you know octopuses have three hearts?', 'One more chapter…'],
+  bounce: ['Boing! Boing! BOING!', 'Higher! Higher!', 'I can almost touch the clouds!'],
+  slide: ['Wheeeee!', 'Up the ladder… and WHOOSH!', 'Again! Again!'],
   movie: ['What a movie!', 'I laughed, I cried, I ate imaginary popcorn.', 'Roll the credits!'],
   tuck: ['Nap time, little buddy.', 'Sleep tight, Plushie.', 'There — cozy on your pillow.'],
   book_start: ['Reading "{title}"…', 'Ooh, "{title}"!', 'Opening "{title}"{by}.'],
@@ -232,7 +243,7 @@ export function ruleProgram(objects: WorldObject[], dropBox: DropBox, caps: Capa
   if (caps.rearrange && movable.length)
     options.push(() => {
       const o = pick(movable);
-      return { op: 'move', target: o.id, x: Math.round(10 + rng() * (WORLD.doorX - 70)) };
+      return { op: 'move', target: o.id, x: Math.round(WORLD.backDoorX + 10 + rng() * (WORLD.doorX - WORLD.backDoorX - 70)) };
     });
   if (caps.design_shapes && rng() < 0.25)
     options.push(() => ({

@@ -29,7 +29,7 @@ export interface PromptContext {
   pendingApprovals: CommNote[];
 }
 
-const OWNER_ACTIONS = 'nap, eat, play, read, watch (a movie on your tablet), skin:<red|pink|blue or a color name like mint> (change your color), code, forage, build, check_dropbox, wander, wave, dance, goto:<objectId>';
+const OWNER_ACTIONS = 'nap, eat, play, read, watch (a movie on your tablet), skin:<red|pink|blue or a color name like mint> (change your color), jump (on the trampoline), slide, code, forage, build, check_dropbox, wander, wave, dance, goto:<objectId>';
 const FAN_ACTIONS = 'wave, dance';
 
 function timeWords(hour: number) {

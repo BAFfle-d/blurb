@@ -18,6 +18,8 @@ export const PET_ACTIONS = [
   'read',
   'watch',
   'skin',
+  'jump',
+  'slide',
   'code',
   'forage',
   'build',

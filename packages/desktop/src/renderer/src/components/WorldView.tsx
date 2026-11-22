@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { WorldRenderer } from '@blurb/render';
-import { OBJECT_DEFS, WORLD, type PublicObject, type PublicState } from '@blurb/shared';
+import { AREAS, OBJECT_DEFS, WORLD, areaAt, type PublicObject, type PublicState } from '@blurb/shared';
 import { api } from '../api';
 import type { PlaceKind, WorldInfo } from '../../../ipc-types';
 
@@ -56,6 +56,7 @@ function ShelfMenu({ shelf }: { shelf?: WorldInfo['shelves'][number] }) {
 }
 
 type Press =
+  | { type: 'pan'; lastX: number }
   | { type: 'pet'; sx: number; sy: number; dragging: boolean; lastPat: number }
   | { type: 'obj'; obj: PublicObject; sx: number; dragging: boolean; offset: number };
 
@@ -69,6 +70,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
   const petOverride = useRef<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ obj: PublicObject; left: number; top: number } | null>(null);
   const [cursor, setCursor] = useState('default');
+  const [view, setView] = useState<{ area: string; following: boolean }>({ area: 'house', following: true });
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -95,8 +97,13 @@ export function WorldView({ onBurstRef, shelves }: Props) {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
+    const camTimer = setInterval(() => {
+      const center = renderer.camX + WORLD.viewWidth / 2;
+      setView({ area: areaAt(center).id, following: renderer.following });
+    }, 400);
     return () => {
       cancelAnimationFrame(raf);
+      clearInterval(camTimer);
       ro.disconnect();
       off();
     };
@@ -109,7 +116,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !r.current) return;
     setMenu(null);
     const w = toWorld(e);
     const renderer = r.current!;
@@ -120,9 +127,12 @@ export function WorldView({ onBurstRef, shelves }: Props) {
     }
     const obj = renderer.hitObject(w.x, w.y);
     if (obj) press.current = { type: 'obj', obj, sx: w.x, dragging: false, offset: w.x - (obj.x + OBJECT_DEFS[obj.k].width / 2) };
+    else press.current = { type: 'pan', lastX: e.clientX }; // drag empty space to look around
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // The cursor can already be over the canvas before the renderer exists.
+    if (!r.current) return;
     const w = toWorld(e);
     const p = press.current;
     if (!p) {
@@ -131,6 +141,12 @@ export function WorldView({ onBurstRef, shelves }: Props) {
       const obj = overPet ? undefined : renderer.hitObject(w.x, w.y);
       hover.current = obj?.id;
       setCursor(overPet ? 'grab' : obj ? 'pointer' : 'default');
+      return;
+    }
+    if (p.type === 'pan') {
+      r.current!.panBy(e.clientX - p.lastX);
+      p.lastX = e.clientX;
+      setCursor('grabbing');
       return;
     }
     if (p.type === 'pet') {
@@ -159,11 +175,13 @@ export function WorldView({ onBurstRef, shelves }: Props) {
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
+    if (!r.current) return;
     const p = press.current;
     press.current = null;
     setCursor('default');
     if (!p) return;
     const w = toWorld(e);
+    if (p.type === 'pan') return;
     if (p.type === 'pet') {
       if (p.dragging) {
         void api.dragEnd();
@@ -181,6 +199,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
 
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    if (!r.current) return;
     const w = toWorld(e);
     const obj = r.current!.hitObject(w.x, w.y);
     if (!obj) return setMenu(null);
@@ -230,10 +249,21 @@ export function WorldView({ onBurstRef, shelves }: Props) {
         onPointerUp={onPointerUp}
         onPointerLeave={() => (hover.current = undefined)}
         onContextMenu={onContextMenu}
+        onWheel={(e) => r.current?.panBy(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY))}
         onDragOver={onDragOver}
         onDrop={onDrop}
         aria-label="Blurb's world. Click Blurb to pet, drag to carry. Click objects to have Blurb use them."
       />
+      <nav className="room-nav" aria-label="Rooms">
+        {AREAS.map((a) => (
+          <button key={a.id} className={view.area === a.id ? 'here' : ''} onClick={() => r.current?.lookAt((a.from + a.to) / 2)}>
+            {a.label}
+          </button>
+        ))}
+        <button className={`follow ${view.following ? 'on' : ''}`} onClick={() => r.current?.follow()} title="Keep Blurb in view">
+          📍 Follow Blurb
+        </button>
+      </nav>
       {menu && def && (
         <div className="obj-menu" style={{ left: menu.left, top: menu.top }} role="dialog" aria-label={`${def.label} options`}>
           <div className="obj-menu-title">{def.label}</div>

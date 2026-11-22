@@ -297,6 +297,50 @@ const plantPot: Drawer = (ctx, o, info) => {
   rect(ctx, x + 2, FLOOR - 7, 1, 5, light(o.c));
 };
 
+/** Same timing as the jumping pose, so the mat dips exactly when Blurb lands. */
+export const JUMP_RATE = Math.PI * 1.4;
+
+const trampoline: Drawer = (ctx, o, info) => {
+  const x = o.x;
+  const bouncing = (o.b ?? 0) > 0;
+  const sag = bouncing && Math.abs(Math.sin(info.t * JUMP_RATE)) < 0.22 ? 2 : 0;
+  // legs
+  for (const lx of [x + 4, x + 38]) {
+    rect(ctx, lx, FLOOR - 9, 2, 9, '#5a5a62');
+    rect(ctx, lx - 1, FLOOR - 1, 4, 1, '#3a3a40');
+  }
+  // springs + rim
+  for (let sx = x + 2; sx < x + 42; sx += 4) dot(ctx, sx, FLOOR - 10, '#b7c0c8');
+  rect(ctx, x, FLOOR - 12, 44, 2, ink(o.c));
+  rect(ctx, x + 1, FLOOR - 12, 42, 1, o.c);
+  // mat (dips in the middle on landing)
+  rect(ctx, x + 4, FLOOR - 11 + sag, 36, 1, '#2a2a30');
+  if (sag) rect(ctx, x + 12, FLOOR - 10 + sag, 20, 1, '#2a2a30');
+  rect(ctx, x + 2, FLOOR - 9, 40, 1, dark(o.c, 0.1));
+};
+
+const slide: Drawer = (ctx, o) => {
+  const x = o.x;
+  const wood = '#a0703c';
+  // ladder
+  rect(ctx, x + 2, FLOOR - 28, 2, 28, ink(wood));
+  rect(ctx, x + 8, FLOOR - 28, 2, 28, ink(wood));
+  for (let y = FLOOR - 4; y > FLOOR - 28; y -= 5) rect(ctx, x + 3, y, 6, 1, wood);
+  // platform + support
+  rect(ctx, x + 2, FLOOR - 28, 13, 3, wood);
+  rect(ctx, x + 2, FLOOR - 28, 13, 1, light(wood));
+  rect(ctx, x + 13, FLOOR - 25, 2, 25, '#5a5a62');
+  // chute
+  for (let i = 0; i <= 32; i++) {
+    const px = x + 13 + i;
+    const py = Math.round(FLOOR - 27 + (i * 24) / 32);
+    rect(ctx, px, py, 1, 3, o.c);
+    dot(ctx, px, py, light(o.c, 0.2));
+    dot(ctx, px, py + 3, ink(o.c));
+  }
+  rect(ctx, x + 44, FLOOR - 3, 2, 3, o.c);
+};
+
 /** Tablet lying on the floor (when carried, the renderer draws it in Blurb's arms). */
 const tablet: Drawer = (ctx, o) => {
   if (o.cr) return;
@@ -469,6 +513,8 @@ export const OBJECT_DRAWERS: Record<ObjectKind, Drawer> = {
   lamp,
   rug,
   plant_pot: plantPot,
+  trampoline,
+  slide,
   tablet,
   pillow,
   blocks,

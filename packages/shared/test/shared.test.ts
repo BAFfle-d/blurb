@@ -116,7 +116,7 @@ describe('BlurbScript validation', () => {
       [
         { op: 'recolor', target: 'tree-1', color: '#ff00aa' },
         { op: 'transform', target: 'tree-1', into: 'bush' },
-        { op: 'move', target: 'bed-1', x: 30 },
+        { op: 'move', target: 'bed-1', x: 330 },
         { op: 'set_skin', skin: 'blue' },
         { op: 'recolor', target: 'self', color: 'mint' },
       ],
@@ -167,7 +167,7 @@ describe('BlurbScript validation', () => {
   });
 
   it('keeps trees in the yard', () => {
-    const r = validateProgram([{ op: 'move', target: 'tree-1', x: 20 }], ctx());
+    const r = validateProgram([{ op: 'move', target: 'tree-1', x: 400 }], ctx()); // the main room
     expect(r.rejected[0].reason).toMatch(/has to stay/);
   });
 
