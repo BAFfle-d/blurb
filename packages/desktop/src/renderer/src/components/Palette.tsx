@@ -7,8 +7,9 @@ import { DRAG_MIME } from './WorldView';
 const GROUPS: Array<{ label: string; items: Array<PlaceKind | 'treat'> }> = [
   { label: 'Snacks', items: ['treat'] },
   { label: 'Resources', items: RESOURCE_KINDS.map((r) => `resource:${r}` as PlaceKind) },
-  { label: 'Toys', items: ['ball', 'yarn', 'plushie'] },
-  { label: 'Decor', items: ['flowers', 'bush', 'plant_pot', 'lamp', 'rug', 'tree'] },
+  { label: 'Toys', items: ['ball', 'yarn', 'plushie', 'blocks', 'top', 'duck'] },
+  { label: 'Gadgets', items: ['tablet'] },
+  { label: 'Decor', items: ['pillow', 'flowers', 'bush', 'plant_pot', 'lamp', 'rug', 'tree'] },
   { label: 'Furniture', items: ['bed', 'bookshelf', 'workbench', 'food_bowl'] },
 ];
 

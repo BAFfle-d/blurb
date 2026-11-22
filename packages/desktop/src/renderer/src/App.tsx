@@ -129,7 +129,7 @@ export function App() {
           <strong>{name}</strong>
           {pet && (
             <span className="mood" title={pet.emotion}>
-              {EMOTION_EMOJI[pet.emotion]} {ACTIVITY_LABELS[pet.activity] ?? pet.activity}
+              {EMOTION_EMOJI[pet.emotion]} {pet.book ? (pet.book.author === 'Wikipedia' ? `learning about ${pet.book.title}` : `reading “${pet.book.title}”`) : ACTIVITY_LABELS[pet.activity] ?? pet.activity}
             </span>
           )}
         </div>
@@ -163,7 +163,7 @@ export function App() {
       </header>
 
       <main className="stage">
-        <WorldView onBurstRef={(fn) => (burst.current = fn)} />
+        <WorldView onBurstRef={(fn) => (burst.current = fn)} shelves={world.shelves} />
         {pet && (
           <div className="statusbar">
             {(['energy', 'fullness', 'boredom', 'social', 'curiosity'] as const).map((k) => {

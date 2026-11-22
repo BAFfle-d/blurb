@@ -123,7 +123,21 @@ export function App() {
             <div className="status-row">
               <span className="mood" title={pet.emotion}>{EMOTION_EMOJI[pet.emotion]}</span>
               <span>
-                <strong>{pet.name}</strong> is {ACTIVITY_LABELS[pet.activity] ?? pet.activity.replaceAll('_', ' ')}
+                <strong>{pet.name}</strong> is{' '}
+                {pet.book ? (
+                  pet.book.author === 'Wikipedia' ? (
+                    <>
+                      learning about <em>{pet.book.title}</em> on Wikipedia
+                    </>
+                  ) : (
+                    <>
+                      reading <em>{pet.book.title}</em>
+                      {pet.book.author ? ` by ${pet.book.author}` : ''}
+                    </>
+                  )
+                ) : (
+                  ACTIVITY_LABELS[pet.activity] ?? pet.activity.replaceAll('_', ' ')
+                )}
                 {pet.where === 'out' && ' (out on the desktop)'}
               </span>
             </div>

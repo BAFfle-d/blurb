@@ -50,6 +50,8 @@ export function interactionX(o: WorldObject): number {
       return o.x + 32;
     case 'computer':
       return o.x + 21;
+    case 'tablet':
+      return o.x + 5;
     case 'bookshelf':
       return o.x + def.width + 10;
     case 'tree':
@@ -78,6 +80,7 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
   const totalRes = Object.values(pet.inventory.resources).reduce((a, b) => a + (b ?? 0), 0);
 
   for (const o of objects) {
+    if (o.data?.carried) continue;
     const def = OBJECT_DEFS[o.kind];
     let s = -Infinity;
     let reason = '';
@@ -98,14 +101,23 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
         s = ctx.sinceCoding < 150 ? -Infinity : n.curiosity * 0.5 + n.boredom * 0.35;
         reason = 'wants to tinker';
         break;
+      case 'tablet':
+        // Read when curious, watch a movie when bored; a little novelty bonus.
+        s = Math.max(n.curiosity * 0.55, n.boredom * 0.6) + 6;
+        reason = n.boredom > n.curiosity ? 'wants to watch a movie' : 'wants to read';
+        break;
       case 'ball':
       case 'yarn':
+      case 'blocks':
+      case 'top':
+      case 'duck':
       case 'plushie':
         s = n.boredom * 0.8 + (o.data?.bounce ? 45 : 0) + (o.kind === 'plushie' ? n.social * 0.3 : 0);
         reason = 'bored';
         break;
       case 'drop_box':
-        s = ctx.dropBox.items.length ? 70 + ctx.dropBox.items.length * 5 : n.curiosity * 0.08;
+        // Capped so a big delivery never outranks real hunger or exhaustion.
+        s = ctx.dropBox.items.length ? 70 + Math.min(4, ctx.dropBox.items.length) * 5 : n.curiosity * 0.08;
         reason = ctx.dropBox.items.length ? 'something in the drop box' : 'checking for mail';
         break;
       case 'comm_box':
@@ -161,6 +173,13 @@ export const PHRASES: Record<string, string[]> = {
   sleep: ['Nap time…', 'Just resting my eyes…', 'Zzz… five more minutes…'],
   eat: ['Nom nom nom!', 'Delicious!', 'Crunchy!'],
   read: ['Ooh, a book about clouds!', 'Did you know octopuses have three hearts?', 'One more chapter…'],
+  movie: ['What a movie!', 'I laughed, I cried, I ate imaginary popcorn.', 'Roll the credits!'],
+  tuck: ['Nap time, little buddy.', 'Sleep tight, Plushie.', 'There — cozy on your pillow.'],
+  book_start: ['Reading "{title}"…', 'Ooh, "{title}"!', 'Opening "{title}"{by}.'],
+  book_finish: ['Finished "{title}"! Loved it.', 'The end of "{title}". *happy sigh*', 'That was "{title}"{by}. What a book!'],
+  learn_start: ['Ooh, learning about {title}!', 'Reading up on {title}…', 'Wikipedia time: {title}!'],
+  learn_finish: ['Did you know? {fact}', 'I learned something: {fact}', 'Fun fact! {fact}'],
+  shelf_done: ['I\'ve read every book on my shelf!', 'All my books are read… new ones, please?'],
   code: ['Beep boop. Tinkering…', 'Let me try something…', 'Compiling dreams…'],
   play: ['Wheee!', 'Catch it, catch it!', 'Boing boing!'],
   forage: ['Ooh, found some goodies!', 'Nature provides!', 'Into the bag you go.'],

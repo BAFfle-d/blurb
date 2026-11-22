@@ -21,7 +21,9 @@ import {
   paletteFromBody,
   validateProgram,
   zoneAt,
+  normalizeColor,
   type BlobPalette,
+  type BookRef,
   type CapabilitySet,
   type CommNote,
   type DropBox,
@@ -53,7 +55,11 @@ export type SimEvent =
   | { type: 'note'; note: CommNote }
   | { type: 'dropbox'; collected: DropBoxItem[] }
   | { type: 'request_program' }
-  | { type: 'log'; text: string };
+  | { type: 'log'; text: string }
+  /** Blurb opened (start) or finished (finish) a real book. Host reacts with speech + memory. */
+  | { type: 'book'; phase: 'start' | 'finish'; book: BookRef; via: 'shelf' | 'tablet' }
+  /** Every book on the shelf has been read (or it was never stocked). */
+  | { type: 'shelf_empty'; shelfId: string; neverStocked: boolean };
 
 export interface SimSnapshot {
   version: 1;
@@ -62,6 +68,8 @@ export interface SimSnapshot {
   dropBox: DropBox;
   notes: CommNote[];
   outbox: CommNote[];
+  /** One-time gifts already delivered (new items arriving with an update). */
+  gifts?: string[];
 }
 
 export type ProgramProvider = (ctx: ProgramContext) => Promise<unknown[] | null>;
@@ -70,6 +78,11 @@ const WALK_SPEED = 34;
 const GRAVITY = 520;
 const MAX_NOTES = 50;
 const MAX_CUSTOM_SKINS = 6;
+const MAX_SHELF_BOOKS = 12;
+/** Watching a movie is mostly fun; reading is mostly curiosity. */
+const WATCH_EFFECT: Partial<Needs> = { boredom: -6, curiosity: -1, energy: -0.2 };
+/** Gift delivered once, so existing pets get the new things from this update. */
+const TABLET_GIFT = 'tablet-books-plushie-v1';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -125,6 +138,8 @@ export class PetSim {
   chattiness = 0.5;
   /** Optional: when set, computer sessions ask the LLM for a program. */
   programProvider?: ProgramProvider;
+  /** Optional: when set, reading on the tablet fetches an article (Wikipedia). */
+  articleProvider?: () => Promise<BookRef | null>;
   /** Fixed hour for tests/demo; otherwise the local clock. */
   hourOverride?: number;
   rng: () => number = Math.random;
@@ -137,6 +152,10 @@ export class PetSim {
   private chatterCooldown = 8;
   private lowNeedNag = 0;
   private dragLast = { x: 0, y: 0, t: 0 };
+  /** Set by a [[action:watch]] tag, read when Blurb picks up the tablet. */
+  private tabletMode?: 'read' | 'watch';
+  private currentBook?: { book: BookRef; via: 'shelf' | 'tablet' };
+  gifts: string[] = [];
 
   constructor(snapshot?: SimSnapshot) {
     this.pet = snapshot?.pet ?? newPetState();
@@ -144,6 +163,17 @@ export class PetSim {
     this.dropBox = snapshot?.dropBox ?? newDropBox();
     this.notes = snapshot?.notes ?? [];
     this.outbox = snapshot?.outbox ?? [];
+    this.gifts = snapshot?.gifts ?? [];
+    // Never resume carrying something: put it down where Blurb is.
+    this.dropCarried();
+    // Never resume mid-book either (the open book isn't saved).
+    delete this.pet.book;
+    if (this.pet.activity === 'reading' || this.pet.activity === 'watching') {
+      this.pet.activity = 'idle';
+      this.pet.activityTimer = 1;
+      this.pet.goal = undefined;
+    }
+    this.deliverUpdateGifts();
     // Never resume mid-drag or out on the desktop.
     if (this.pet.activity === 'dragged' || this.pet.activity === 'falling' || this.pet.mode === 'overlay') {
       this.pet.mode = 'windowed';
@@ -188,6 +218,7 @@ export class PetSim {
       dropBox: this.dropBox,
       notes: this.notes,
       outbox: this.outbox,
+      gifts: this.gifts,
     });
   }
 
@@ -320,6 +351,7 @@ export class PetSim {
         this.tickActivity(dt);
     }
 
+    this.followCarried();
     if (p.emotionUntil < now) p.emotion = moodFromNeeds(p.needs);
     this.nag(dt);
   }
@@ -349,7 +381,8 @@ export class PetSim {
     }
     // Occasionally something interesting washes up in the yard.
     if (this.rng() < dt / 90 && this.world.objects.filter((o) => o.kind === 'resource').length < 5) {
-      const kinds: ResourceKind[] = ['pebble', 'stick', 'fluff', 'fluff', 'leaf'];
+      // Common finds, plus the odd scrap of bioplastic, wire or glass.
+      const kinds: ResourceKind[] = ['pebble', 'pebble', 'pebble', 'stick', 'stick', 'stick', 'fluff', 'fluff', 'fluff', 'leaf', 'leaf', 'bioplastic', 'wire', 'glass'];
       const r = kinds[Math.floor(this.rng() * kinds.length)];
       this.addObject('resource', WORLD.doorX + 10 + this.rng() * (WORLD.width - WORLD.doorX - 24), 'world', {
         data: { resource: r },
@@ -445,6 +478,7 @@ export class PetSim {
     const p = this.pet;
     const g = p.goal;
     p.goal = undefined;
+    if (g?.then) return this.startTablet(g.then === 'watch_tablet' ? 'watch' : 'read');
     if (!g || g.kind === 'wander' || g.kind === 'go_to' || !g.objectId) return this.setActivity('idle', 2 + this.rng() * 4);
     const o = this.world.objects.find((x) => x.id === g.objectId);
     if (!o) return this.setActivity('idle', 1);
@@ -457,6 +491,7 @@ export class PetSim {
     if (!def.activity) return this.setActivity('idle', 2);
     const p = this.pet;
     p.facing = o.x + def.width / 2 < p.position.x ? 'left' : 'right';
+    if (def.portable) return this.pickUpPortable(o);
     switch (def.activity) {
       case 'eating': {
         if ((o.data?.servings ?? 0) <= 0) {
@@ -475,6 +510,7 @@ export class PetSim {
         break;
       case 'reading':
         this.log('started reading');
+        this.openBook('shelf');
         break;
       case 'coding':
         this.sinceCoding = 0;
@@ -516,9 +552,10 @@ export class PetSim {
       return this.setActivity('idle', 1);
     }
     const def = OBJECT_DEFS[o.kind];
-    if (def.effect) {
+    const effect = p.activity === 'watching' ? WATCH_EFFECT : def.effect;
+    if (effect) {
       const k = dt * Math.max(1, this.simSpeed * 0.5);
-      for (const [need, rate] of Object.entries(def.effect)) {
+      for (const [need, rate] of Object.entries(effect)) {
         const key = need as keyof Needs;
         p.needs[key] = clamp(p.needs[key] + (rate ?? 0) * k, 0, 100);
       }
@@ -546,7 +583,14 @@ export class PetSim {
         this.log('woke up from a nap');
         break;
       case 'reading':
-        this.maybeSay('read', {}, 'happy');
+      case 'watching':
+        if (this.currentBook) this.closeBook();
+        else if (a === 'reading') this.maybeSay('read', {}, 'happy');
+        else this.maybeSay('movie', {}, 'happy');
+        if (OBJECT_DEFS[o.kind].portable) this.dropCarried();
+        break;
+      case 'playing':
+        if (o.kind === 'plushie') this.tuckInPlushie(o);
         break;
       case 'foraging':
         this.forage(o);
@@ -651,11 +695,12 @@ export class PetSim {
     const collected = [...items];
     this.dropBox.items = [];
     const box = this.world.objects.find((o) => o.kind === 'drop_box');
+    let slot = 0;
     for (const it of collected) {
       if (it.kind === 'resource' && it.resource) this.addResource(it.resource, it.count);
       if (it.kind === 'treat') this.addServings(it.count);
       if (it.kind === 'object' && it.objectKind) {
-        for (let i = 0; i < it.count; i++) this.addObject(it.objectKind, (box?.x ?? 190) + 28 + i * 14, it.from);
+        for (let i = 0; i < it.count; i++) this.addObject(it.objectKind, (box?.x ?? 190) + 26 + (slot++ % 6) * 12, it.from);
       }
     }
     const desc = collected.map((i) => `${i.count} ${i.resource ?? i.objectKind ?? 'treat'}`).join(', ');
@@ -669,6 +714,11 @@ export class PetSim {
     const bowl = this.world.objects.find((o) => o.kind === 'food_bowl');
     if (!bowl) return;
     bowl.data = { ...bowl.data, servings: Math.min(9, (bowl.data?.servings ?? 0) + n) };
+  }
+
+  /** Leave a plain note for the owner (Blurb walks it to the comm box). */
+  leaveNote(text: string) {
+    this.writeNote(text.slice(0, 280));
   }
 
   private writeNote(text: string, request?: CommNote['request']) {
@@ -859,7 +909,7 @@ export class PetSim {
         continue;
       }
       if (source === 'fan' && !['wave', 'dance'].includes(t.action)) continue;
-      if (this.pet.mode === 'overlay' && !['wave', 'dance'].includes(t.action)) continue;
+      if (this.pet.mode === 'overlay' && !['wave', 'dance', 'skin'].includes(t.action)) continue;
       const byKind = (kinds: ObjectKind[]) => {
         const cands = this.world.objects.filter((o) => kinds.includes(o.kind));
         cands.sort((a, b) => Math.abs(interactionX(a) - this.pet.position.x) - Math.abs(interactionX(b) - this.pet.position.x));
@@ -883,7 +933,14 @@ export class PetSim {
           use(byKind(['ball', 'yarn', 'plushie']));
           break;
         case 'read':
-          use(byKind(['bookshelf']));
+          use(byKind(['bookshelf', 'tablet']));
+          break;
+        case 'watch':
+          this.tabletMode = 'watch';
+          use(byKind(['tablet']));
+          break;
+        case 'skin':
+          this.changeColor(t.arg ?? '');
           break;
         case 'code':
           use(byKind(['computer']));
@@ -915,6 +972,7 @@ export class PetSim {
 
   dragStart() {
     if (this.pet.mode !== 'windowed') return;
+    this.dropCarried();
     this.pet.goal = undefined;
     this.setActivity('dragged');
     this.setEmotion(this.rng() < 0.5 ? 'excited' : 'confused', 30);
@@ -1038,6 +1096,25 @@ export class PetSim {
     return true;
   }
 
+  /**
+   * Change color from chat: a drop-box skin by id or name ("pink", "glacier"),
+   * or any color name ("mint") through the BlurbScript recolor rules.
+   */
+  changeColor(arg: string): boolean {
+    const a = arg.toLowerCase().trim();
+    const skin = this.dropBox.skins.find((s) => s.id === a || s.name.toLowerCase() === a);
+    if (skin) {
+      if (!this.capabilities.change_skin) {
+        this.log('wanted to change skin, but that is switched off');
+        return false;
+      }
+      return this.setSkin(skin.id);
+    }
+    const color = normalizeColor(a);
+    if (!color) return false;
+    return this.runProgram([{ op: 'recolor', target: 'self', color }], { quiet: true }).ops.length > 0;
+  }
+
   setSkin(skinId: string) {
     if (!this.dropBox.skins.some((s) => s.id === skinId)) return false;
     this.pet.appearance.skinId = skinId;
@@ -1052,8 +1129,160 @@ export class PetSim {
     return true;
   }
 
+  // -------------------------------------------------------------------------
+  // portable things (the tablet)
+  // -------------------------------------------------------------------------
+
+  private carriedObject(): WorldObject | undefined {
+    const id = this.pet.inventory.carrying;
+    return id ? this.world.objects.find((o) => o.id === id) : undefined;
+  }
+
+  /** Pick the tablet up and carry it somewhere cozy before using it. */
+  private pickUpPortable(o: WorldObject) {
+    const p = this.pet;
+    p.inventory.carrying = o.id;
+    o.data = { ...o.data, carried: true };
+    const mode = this.tabletMode ?? (p.needs.boredom > p.needs.curiosity ? 'watch' : 'read');
+    this.tabletMode = undefined;
+    // Cozy spots: the rug, the end of the bed, under the tree.
+    const spots: number[] = [];
+    for (const x of this.world.objects) {
+      if (x.kind === 'rug') spots.push(x.x + 31);
+      if (x.kind === 'bed') spots.push(x.x + 52);
+      if (x.kind === 'tree') spots.push(x.x + 8);
+    }
+    const x = spots.length ? spots[Math.floor(this.rng() * spots.length)] : p.position.x;
+    this.log(`picked up the tablet to ${mode === 'watch' ? 'watch a movie' : 'read'}`);
+    p.goal = { kind: 'go_to', x: clamp(x, 10, WORLD.width - 10), reason: 'cozy spot', then: mode === 'watch' ? 'watch_tablet' : 'read_tablet' };
+    this.setActivity('walking');
+  }
+
+  private startTablet(mode: 'read' | 'watch') {
+    const o = this.carriedObject();
+    if (!o) return this.setActivity('idle', 1);
+    const def = OBJECT_DEFS[o.kind];
+    this.setActivity(mode === 'watch' ? 'watching' : 'reading', def.duration ?? 20, o.id);
+    this.pet.goal = { kind: 'use_object', objectId: o.id, x: this.pet.position.x, reason: 'using' };
+    if (mode === 'watch') return this.log('started a movie on the tablet');
+    if (!this.articleProvider) return this.openBook('tablet');
+    const tabletId = o.id;
+    const stillReading = () => this.pet.activity === 'reading' && this.pet.inventory.carrying === tabletId && !this.currentBook;
+    this.articleProvider()
+      .then((a) => {
+        if (!stillReading()) return;
+        if (!a) return this.openBook('tablet');
+        this.currentBook = { book: a, via: 'tablet' };
+        this.pet.book = { title: a.title, author: a.author };
+        this.log(`started reading about "${a.title}" on the tablet`);
+        this.emit({ type: 'book', phase: 'start', book: a, via: 'tablet' });
+      })
+      .catch(() => stillReading() && this.openBook('tablet'));
+  }
+
+  /** Put down whatever Blurb is carrying, right where it is. */
+  dropCarried() {
+    const o = this.carriedObject();
+    this.pet.inventory.carrying = undefined;
+    if (!o) return;
+    o.data = { ...o.data, carried: undefined };
+    o.x = Math.round(clamp(this.pet.position.x + (this.pet.facing === 'right' ? 6 : -16), 0, WORLD.width - OBJECT_DEFS[o.kind].width));
+    o.zone = zoneAt(o.x + OBJECT_DEFS[o.kind].width / 2);
+    if (this.currentBook?.via === 'tablet') this.closeBook(false);
+  }
+
+  /** Keep a carried object with Blurb. */
+  private followCarried() {
+    const o = this.carriedObject();
+    if (o) o.x = Math.round(this.pet.position.x - OBJECT_DEFS[o.kind].width / 2);
+  }
+
+  // -------------------------------------------------------------------------
+  // the plushie and its pillow
+  // -------------------------------------------------------------------------
+
+  private tuckInPlushie(plushie: WorldObject) {
+    if (!this.capabilities.rearrange) return;
+    const pillow = this.world.objects.find((o) => o.kind === 'pillow');
+    if (!pillow) return;
+    if (Math.abs(pillow.x + 8 - (plushie.x + 6)) <= 8) return; // already resting
+    const night = this.world.timeOfDay >= 20 || this.world.timeOfDay < 7;
+    if (!night && this.rng() > 0.6) return;
+    plushie.x = pillow.x + 2;
+    plushie.zone = pillow.zone;
+    this.emit({ type: 'burst', kind: 'pet', x: plushie.x + 6, y: WORLD.floorY - 12 });
+    this.maybeSay('tuck', {}, 'love', true);
+    this.log('tucked the plushie in on its pillow');
+  }
+
+  // -------------------------------------------------------------------------
+  // real books
+  // -------------------------------------------------------------------------
+
+  shelves(): WorldObject[] {
+    return this.world.objects.filter((o) => o.kind === 'bookshelf');
+  }
+
+  /** Replace a shelf's books (owner restock, or the host's first fill). */
+  setShelfBooks(shelfId: string, books: BookRef[]) {
+    const shelf = this.world.objects.find((o) => o.id === shelfId && o.kind === 'bookshelf');
+    if (!shelf) return false;
+    shelf.data = {
+      ...shelf.data,
+      books: books.slice(0, MAX_SHELF_BOOKS).map((b) => ({ ...b, read: false })),
+      shelfSeed: ((shelf.data?.shelfSeed ?? 0) + 1 + Math.floor(this.rng() * 50)) % 997,
+    };
+    this.emit({ type: 'burst', kind: 'magic', x: shelf.x + 17, y: WORLD.floorY - 40 });
+    this.log(`new books arrived on the shelf: ${books.slice(0, 3).map((b) => `"${b.title}"`).join(', ')}${books.length > 3 ? '…' : ''}`);
+    return true;
+  }
+
+  private openBook(via: 'shelf' | 'tablet') {
+    const shelves = this.shelves();
+    for (const sh of shelves) {
+      const next = sh.data?.books?.find((b) => !b.read);
+      if (next) {
+        this.currentBook = { book: next, via };
+        this.pet.book = { title: next.title, author: next.author };
+        this.log(`started reading "${next.title}"${next.author ? ` by ${next.author}` : ''}`);
+        this.emit({ type: 'book', phase: 'start', book: next, via });
+        return;
+      }
+    }
+    const sh = shelves[0];
+    if (sh) this.emit({ type: 'shelf_empty', shelfId: sh.id, neverStocked: !sh.data?.books?.length });
+  }
+
+  private closeBook(finished = true) {
+    const cur = this.currentBook;
+    this.currentBook = undefined;
+    this.pet.book = undefined;
+    if (!cur || !finished) return;
+    cur.book.read = true;
+    this.log(`finished reading "${cur.book.title}"`);
+    this.emit({ type: 'book', phase: 'finish', book: cur.book, via: cur.via });
+  }
+
+  /** A one-time delivery of this update's new things, through the drop box. */
+  private deliverUpdateGifts() {
+    if (this.gifts.includes(TABLET_GIFT)) return;
+    this.gifts.push(TABLET_GIFT);
+    const has = (k: ObjectKind) => this.world.objects.some((o) => o.kind === k);
+    const from = 'owner' as const;
+    if (!has('tablet')) this.dropBox.items.push({ id: makeId('drop'), kind: 'object', objectKind: 'tablet', count: 1, from, fromName: 'a new update', addedAt: Date.now() });
+    if (!has('pillow')) this.dropBox.items.push({ id: makeId('drop'), kind: 'object', objectKind: 'pillow', count: 1, from, fromName: 'a new update', addedAt: Date.now() });
+    for (const k of ['blocks', 'top', 'duck'] as ObjectKind[]) {
+      if (!has(k)) this.dropBox.items.push({ id: makeId('drop'), kind: 'object', objectKind: k, count: 1, from, fromName: 'a new update', addedAt: Date.now() });
+    }
+    for (const [r, n] of [['bioplastic', 2], ['wire', 2], ['glass', 1]] as Array<[ResourceKind, number]>) {
+      this.dropBox.items.push({ id: makeId('drop'), kind: 'resource', resource: r, count: n, from, fromName: 'a new update', addedAt: Date.now() });
+    }
+    this.syncBadges();
+  }
+
   setMode(mode: 'windowed' | 'overlay') {
     if (this.pet.mode === mode) return;
+    this.dropCarried();
     this.pet.mode = mode;
     this.pet.goal = undefined;
     if (mode === 'overlay') {

@@ -13,6 +13,7 @@ import {
   BUILTIN_SKINS,
   DEFAULT_SETTINGS,
   LIMITS,
+  NAMED_COLORS,
   OBJECT_DEFS,
   TagStreamParser,
   extractProgramJson,
@@ -26,6 +27,7 @@ import {
   type Emotion,
   type FanEvent,
   type FanMode,
+  type BookRef,
   type ParsedTag,
   type PublicState,
 } from '@blurb/shared';
@@ -33,6 +35,7 @@ import { DesktopSim, PetSim, phrase, type DesktopEnv, type SimEvent, type SimSna
 import {
   ChatQueue,
   MemoryStore,
+  bookReactionMessages,
   createProvider,
   explainError,
   fanReplyMessages,
@@ -46,6 +49,8 @@ import {
   type PromptContext,
 } from '@blurb/llm';
 import { RelayClient, type RelayStatus, type WSLike } from './relay-client.js';
+import { BookSource, type ShelfFill } from './books.js';
+import { WikiSource } from './wiki.js';
 
 export interface HostAdapters {
   dataDir: string;
@@ -55,6 +60,8 @@ export interface HostAdapters {
   desktopEnv?(): DesktopEnv | null;
   /** Screenshot for screen questions/peeks. Never sent to the relay. */
   captureScreen?(): Promise<{ mime: 'image/png' | 'image/jpeg'; base64: string } | null>;
+  /** Network fetch for Open Library (tests pass a mock). */
+  fetchImpl?: typeof fetch;
 }
 
 export interface ModerationItem {
@@ -92,6 +99,10 @@ export class PetHost {
   relay?: RelayClient;
   moderation: ModerationItem[] = [];
   ownerLog: ChatMessage[] = [];
+  books: BookSource;
+  wiki: WikiSource;
+  private askedForBooks = new Set<number>();
+  private restocking = false;
 
   private listeners = new Set<(e: HostEvent) => void>();
   private queue: ChatQueue<ChatJob>;
@@ -114,7 +125,19 @@ export class PetHost {
     this.desktop = new DesktopSim(this.sim);
     this.memory = new MemoryStore(path.join(adapters.dataDir, 'memory.json'));
     this.queue = new ChatQueue<ChatJob>((item, signal) => this.runChat(item.payload, signal));
-    this.sim.on((event) => this.emit({ type: 'sim', event }));
+    this.books = new BookSource({ fetchImpl: adapters.fetchImpl });
+    this.wiki = new WikiSource({ fetchImpl: adapters.fetchImpl });
+    // Reading on the tablet = a Wikipedia article on one of the owner's topics.
+    this.sim.articleProvider = async () => {
+      const cfg = this.settings.behavior.realBooks;
+      if (!cfg.wikipedia) return null;
+      return this.wiki.article(this.books.pickTopic(cfg.topics));
+    };
+    this.sim.on((event) => {
+      this.emit({ type: 'sim', event });
+      if (event.type === 'book') void this.onBook(event.book, event.phase);
+      if (event.type === 'shelf_empty') void this.onShelfEmpty(event.shelfId, event.neverStocked);
+    });
     this.sim.programProvider = async (pctx) => {
       if (!this.provider) return null;
       const text = await this.provider.complete({ messages: programMessages(this.promptContext(), pctx), maxTokens: 300, temperature: 0.9 });
@@ -283,6 +306,12 @@ export class PetHost {
   // -------------------------------------------------------------------------
 
   private pushOwnerLog(m: ChatMessage) {
+    const i = this.ownerLog.findIndex((x) => x.id === m.id);
+    if (i >= 0) {
+      this.ownerLog[i] = m;
+      this.emit({ type: 'chat', message: m });
+      return;
+    }
     this.ownerLog.push(m);
     if (this.ownerLog.length > 100) this.ownerLog.shift();
     this.emit({ type: 'chat', message: m });
@@ -381,7 +410,8 @@ export class PetHost {
     this.sim.endSpeech(speechId);
     this.sim.applyTags(tags.filter((t) => t.type === 'action'), opts.source);
     const emotion = this.sim.pet.emotion;
-    if (opts.audience === 'owner') this.emit({ type: 'chat', message: { ...reply, text, emotion } });
+    // Keep AI replies in the history too (not just the live stream), so reopening the window shows them.
+    if (opts.audience === 'owner') this.pushOwnerLog({ ...reply, text, emotion });
     return { text, emotion, aborted: false };
   }
 
@@ -429,9 +459,16 @@ export class PetHost {
     const rng = this.sim.rng;
     const act = (a: Extract<ParsedTag, { type: 'action' }>['action']) => this.sim.applyTags([{ type: 'action', action: a }], 'owner');
     const skin = BUILTIN_SKINS.find((s) => t.includes(s.id) || t.includes(s.name.toLowerCase()));
-    if (skin && /(turn|go|change|be|wear|color|colour|skin)/.test(t)) {
+    const wantsColor = /(turn|go|change|be|wear|color|colour|skin|paint)/.test(t);
+    if (skin && wantsColor) {
       this.sim.setSkin(skin.id);
       return this.ruleReply(job, `Ta-da! ${skin.name} mode!`, 'excited', visibility);
+    }
+    const named = wantsColor ? Object.keys(NAMED_COLORS).find((c) => new RegExp(`\\b${c}\\b`).test(t)) : undefined;
+    if (named) {
+      return this.sim.changeColor(named)
+        ? this.ruleReply(job, `Ta-da! I'm ${named} now!`, 'excited', visibility)
+        : this.ruleReply(job, 'Hmm, changing my color is switched off in my abilities.', 'confused', visibility);
     }
     const intents: Array<[RegExp, () => [string, Emotion]]> = [
       [/\b(hi|hello|hey|yo|morning|evening)\b/, () => (this.sim.gesture('wave'), ['Hi hi! I missed you!', 'happy'])],
@@ -439,6 +476,7 @@ export class PetHost {
       [/nap|sleep|bed|rest/, () => (act('nap'), ['Okay… nap time. Zzz.', 'sleepy'])],
       [/eat|food|hungry|snack/, () => (act('eat'), ['Snack time!', 'excited'])],
       [/play|ball|toy|yarn/, () => (act('play'), ['Play! Play! Play!', 'excited'])],
+      [/movie|film|watch|tablet/, () => (act('watch'), ['Movie night! Grabbing my tablet.', 'excited'])],
       [/read|book/, () => (act('read'), ['Ooh, story time.', 'happy'])],
       [/code|computer|tinker|program/, () => (act('code'), ['To the computer! Beep boop.', 'thinking'])],
       [/forage|tree|bush|gather/, () => (act('forage'), ['Off to forage!', 'happy'])],
@@ -623,6 +661,71 @@ export class PetHost {
     const img = await this.adapters.captureScreen?.();
     if (!img) return this.ownerSay(question || 'What do you see on my screen?');
     this.ownerSay(question || 'What do you see on my screen?', { image: img });
+  }
+
+  // -------------------------------------------------------------------------
+  // books
+  // -------------------------------------------------------------------------
+
+  /** Fill a shelf with new books (owner click, or the very first fill). */
+  async restockShelf(shelfId?: string, topic?: string): Promise<ShelfFill & { ok: boolean }> {
+    const shelf = shelfId ? this.sim.world.objects.find((o) => o.id === shelfId) : this.sim.shelves()[0];
+    if (!shelf || shelf.kind !== 'bookshelf') return { ok: false, books: [], source: 'classics', topic: '', error: 'No bookshelf.' };
+    if (this.restocking) return { ok: false, books: [], source: 'classics', topic: '', error: 'Already fetching books.' };
+    this.restocking = true;
+    try {
+      const cfg = this.settings.behavior.realBooks;
+      const fill = cfg.enabled ? await this.books.fillShelf(topic?.trim() || this.books.pickTopic(cfg.topics)) : this.books.classics();
+      this.sim.setShelfBooks(shelf.id, fill.books);
+      this.sim.say(
+        fill.source === 'openlibrary' ? `New books about ${fill.topic}! ${fill.books.length} of them!` : 'New old books! The classics!',
+        { emotion: 'excited', visibility: 'public', audience: 'everyone' },
+      );
+      return { ...fill, ok: true };
+    } finally {
+      this.restocking = false;
+    }
+  }
+
+  private async onShelfEmpty(shelfId: string, neverStocked: boolean) {
+    if (neverStocked) {
+      await this.restockShelf(shelfId);
+      return;
+    }
+    // Everything's been read: say so, and leave the owner a note (once per shelf fill).
+    const seed = this.sim.world.objects.find((o) => o.id === shelfId)?.data?.shelfSeed ?? 0;
+    if (this.askedForBooks.has(seed)) return;
+    this.askedForBooks.add(seed);
+    this.sim.say(phrase('shelf_done', this.sim.rng), { emotion: 'sad', visibility: 'public', audience: 'owner' });
+    this.sim.leaveNote("I've read every book on my shelf! Could I have some new ones? (Right-click my bookshelf → New books.)");
+  }
+
+  private async onBook(book: BookRef, phase: 'start' | 'finish') {
+    const by = book.author ? ` by ${book.author}` : '';
+    const wiki = book.key.startsWith('wiki:');
+    const fact = (book.blurb ?? '').split(/(?<=[.!?])\s/)[0].slice(0, 160);
+    if (phase === 'finish') {
+      if (wiki) this.memory.add('learned', `I learned about ${book.title}: ${fact}`, 1);
+      else this.memory.add('event', `I read "${book.title}"${by}${book.blurb ? ` — ${book.blurb.slice(0, 100)}` : ''}`, 0.8);
+    }
+    const key = wiki ? (phase === 'start' ? 'learn_start' : 'learn_finish') : phase === 'start' ? 'book_start' : 'book_finish';
+    const sayRule = () =>
+      (!wiki || phase === 'start' || fact) &&
+      this.sim.say(phrase(key, this.sim.rng, { title: book.title, by, fact }), { emotion: wiki && phase === 'finish' ? 'excited' : 'happy', visibility: 'public', audience: 'everyone' });
+    if (!this.provider || this.brainBusy || this.queue.busy) return sayRule();
+    const full = phase === 'start' ? await this.books.describe(book) : book;
+    if (full.blurb && !book.blurb) book.blurb = full.blurb; // keep it for the finish reaction + memory
+    try {
+      this.brainBusy = true;
+      const out = await this.provider.complete({ messages: bookReactionMessages(this.promptContext(false), full, phase), maxTokens: 90, temperature: 0.9, signal: AbortSignal.timeout(45_000) });
+      const r = parseTagged(out);
+      if (r.text) this.sim.say(r.text.slice(0, 220), { emotion: r.emotion ?? 'happy', visibility: 'public', audience: 'everyone' });
+      else sayRule();
+    } catch {
+      sayRule();
+    } finally {
+      this.brainBusy = false;
+    }
   }
 
   // -------------------------------------------------------------------------

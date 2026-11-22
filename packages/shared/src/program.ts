@@ -71,8 +71,14 @@ export function describeProgramLanguage(ctx: ProgramContext): string {
   const c = ctx.capabilities;
   if (c.recolor_self || c.recolor_objects)
     allowed.push(`{"op":"recolor","target":"<objectId${c.recolor_self ? ' or self' : ''}>","color":"#rrggbb"}`);
-  if (c.transform_objects)
-    allowed.push(`{"op":"transform","target":"<objectId>","into":"<kind in same family: tree|bush|flowers or ball|yarn|plushie>"}`);
+  if (c.transform_objects) {
+    const fam = (f: 'plant' | 'toy') =>
+      Object.values(OBJECT_DEFS)
+        .filter((d) => d.family === f && !d.beloved)
+        .map((d) => d.kind)
+        .join('|');
+    allowed.push(`{"op":"transform","target":"<objectId>","into":"<kind in same family: ${fam('plant')} or ${fam('toy')}>"} (your plushie friend can't be transformed)`);
+  }
   if (c.rearrange) allowed.push(`{"op":"move","target":"<objectId>","x":<0-${WORLD.width}>}`);
   if (c.build_copies) allowed.push(`{"op":"build","kind":"<kind that already exists>","x":<number>} (costs resources)`);
   if (c.change_skin) allowed.push(`{"op":"set_skin","skin":"<skin id from drop box>"}`);
@@ -180,6 +186,7 @@ export function validateOp(
         return reject('not a kind of thing that exists');
       const from = OBJECT_DEFS[o.kind];
       const to = OBJECT_DEFS[into as ObjectKind];
+      if (from.beloved) return reject(`that's my ${from.label.toLowerCase()} friend — I'd never change it`);
       if (!from.family || from.family !== to.family)
         return reject(`a ${from.label.toLowerCase()} can't become a ${to.label.toLowerCase()} (different family)`);
       if (!to.zones.includes(o.zone)) return reject(`a ${to.label.toLowerCase()} doesn't belong in the ${o.zone}`);

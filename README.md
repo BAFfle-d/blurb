@@ -78,6 +78,16 @@ Data flow:
 
 ---
 
+## Things in Blurb's world
+
+- **Bookshelf, with real books.** It fills itself from [Open Library](https://openlibrary.org) on cozy topics (or your favorites, in Settings → Behavior). Blurb reads each book's real description and reacts. To restock, right-click the shelf → **New books**, optionally with a topic. Offline, it falls back to public-domain classics.
+- **Tablet.** Blurb carries it somewhere cozy, then reads Wikipedia (and remembers what it learned) or watches a movie. It's built from bioplastic, wire and glass.
+- **Pillow.** The plushie sits on it, and Blurb tucks it in after playing, always at bedtime. The plushie is Blurb's friend, so it can never be transformed into anything else.
+- **Toys:** ball, yarn, plushie, wooden blocks, spinning top, rubber duck.
+- **Color by chat:** ask Blurb to turn pink, blue, mint, etc. The AI does it with an action tag, and it's told never to claim it did something it didn't tag.
+
+Only the topic is sent to Open Library and Wikipedia. Nothing about you is.
+
 ## The rules you gave Blurb, and how they're enforced
 
 **"Blurb can do basic coding … but cannot give itself new abilities."** When Blurb sits at its computer, the LLM is asked for a short JSON program in *BlurbScript*. That program is **data, not code**: it's parsed and every instruction is checked against a closed whitelist plus your capability switches before the engine applies it. There is no `eval`, and the grammar has no instruction for flying, inventing object kinds, files, apps or the network — so "can't give itself new powers" is a property of the grammar, not a promise in a prompt.

@@ -28,6 +28,7 @@ export function sanitizeSettings(input: unknown): AppSettings {
   const fans = (i.fans ?? {}) as Partial<AppSettings['fans']>;
   const beh = (i.behavior ?? {}) as Partial<AppSettings['behavior']>;
   const peek = (beh.screenPeek ?? {}) as Partial<AppSettings['behavior']['screenPeek']>;
+  const books = (beh.realBooks ?? {}) as Partial<AppSettings['behavior']['realBooks']>;
   const caps = {} as CapabilitySet;
   for (const c of CAPABILITIES) caps[c] = bool((i.capabilities as CapabilitySet | undefined)?.[c], d.capabilities[c]);
   const provider = (PROVIDER_IDS as readonly string[]).includes(llm.provider as string) ? (llm.provider as ProviderId) : d.llm.provider;
@@ -67,6 +68,11 @@ export function sanitizeSettings(input: unknown): AppSettings {
         enabled: bool(peek.enabled, false),
         intervalMin: num(peek.intervalMin, 2, 240, 15),
         allowCloud: bool(peek.allowCloud, false),
+      },
+      realBooks: {
+        enabled: bool(books.enabled, true),
+        topics: str(books.topics, 300, ''),
+        wikipedia: bool(books.wikipedia, true),
       },
     },
   };

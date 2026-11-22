@@ -64,7 +64,8 @@ const bookshelf: Drawer = (ctx, o) => {
   for (let shelf = 0; shelf < 3; shelf++) {
     const sy = top + 4 + shelf * 18;
     let bx = x + 3;
-    let i = shelf * 5;
+    const seed = Math.floor((o.v ?? 0) % 97);
+    let i = shelf * 5 + seed;
     while (bx < x + 30) {
       const bw = 2 + Math.floor(hash01(i + strHash(o.id) * 100) * 3);
       const bh = 10 + Math.floor(hash01(i * 3.1) * 4);
@@ -296,6 +297,81 @@ const plantPot: Drawer = (ctx, o, info) => {
   rect(ctx, x + 2, FLOOR - 7, 1, 5, light(o.c));
 };
 
+/** Tablet lying on the floor (when carried, the renderer draws it in Blurb's arms). */
+const tablet: Drawer = (ctx, o) => {
+  if (o.cr) return;
+  drawTablet(ctx, o.x, FLOOR - 7, o.c, 'off', 0);
+};
+
+/** Shared by the floor drawing and the in-arms drawing. */
+export function drawTablet(ctx: Ctx, x: number, y: number, color: string, screen: 'off' | 'page' | 'movie', t: number) {
+  outlinedRect(ctx, x, y, 10, 7, color, ink(color));
+  const sx = x + 1;
+  const sy = y + 1;
+  if (screen === 'off') {
+    rect(ctx, sx + 1, sy + 1, 7, 4, '#1d2433');
+    dot(ctx, sx + 2, sy + 1, '#3a4458');
+  } else if (screen === 'page') {
+    rect(ctx, sx + 1, sy + 1, 7, 4, '#fff6e0');
+    rect(ctx, sx + 2, sy + 2, 5, 1, '#9a8f7a');
+    rect(ctx, sx + 2, sy + 4, 4, 1, '#9a8f7a');
+  } else {
+    const frame = Math.floor(t * 3);
+    const sky = ['#80d0f8', '#f48fb1', '#f5d442', '#7fe0b0'][frame % 4];
+    rect(ctx, sx + 1, sy + 1, 7, 4, sky);
+    rect(ctx, sx + 1, sy + 4, 7, 1, '#4caf50');
+    dot(ctx, sx + 2 + (frame % 5), sy + 3, '#e8303a');
+  }
+}
+
+const pillow: Drawer = (ctx, o) => {
+  const x = o.x;
+  ellipse(ctx, x + 8, FLOOR - 3, 8, 3, ink(o.c));
+  ellipse(ctx, x + 8, FLOOR - 3, 7, 2, o.c);
+  rect(ctx, x + 3, FLOOR - 5, 10, 1, light(o.c, 0.15));
+  dot(ctx, x + 8, FLOOR - 3, dark(o.c, 0.12));
+  dot(ctx, x + 1, FLOOR - 5, ink(o.c));
+  dot(ctx, x + 15, FLOOR - 5, ink(o.c));
+};
+
+const BLOCK_COLORS = ['#e8303a', '#3f7fdc', '#f5d442', '#4caf50'];
+const blocks: Drawer = (ctx, o, info) => {
+  const x = o.x;
+  const wobble = (o.b ?? 0) > 0 ? Math.round(Math.sin(info.t * 8)) : 0;
+  const block = (bx: number, by: number, c: string, letter: number) => {
+    outlinedRect(ctx, bx, by, 5, 5, c, ink(c));
+    rect(ctx, bx + 1, by + 1, 3, 1, light(c));
+    dot(ctx, bx + 2, by + 2 + (letter % 2), '#ffffff');
+  };
+  block(x, FLOOR - 5, o.c, 0);
+  block(x + 5, FLOOR - 5, BLOCK_COLORS[1], 1);
+  block(x + 3 + wobble, FLOOR - 10, BLOCK_COLORS[2], 2);
+};
+
+const top: Drawer = (ctx, o, info) => {
+  const x = o.x;
+  const spinning = (o.b ?? 0) > 0;
+  const phase = spinning ? Math.floor(info.t * 12) % 2 : 0;
+  rect(ctx, x + 3, FLOOR - 9, 2, 2, '#7a5230');
+  ellipse(ctx, x + 4, FLOOR - 5, 4, 2, ink(o.c));
+  ellipse(ctx, x + 4, FLOOR - 5, 3, 1, phase ? light(o.c, 0.2) : o.c);
+  rect(ctx, x + 1 + phase * 2, FLOOR - 5, 2, 1, '#ffffff');
+  rect(ctx, x + 3, FLOOR - 3, 2, 2, ink(o.c));
+  dot(ctx, x + 4, FLOOR - 1, '#3a3a40');
+};
+
+const duck: Drawer = (ctx, o, info) => {
+  const x = o.x;
+  const bob = (o.b ?? 0) > 0 ? Math.round(Math.abs(Math.sin(info.t * 6))) : 0;
+  ellipse(ctx, x + 4, FLOOR - 3 - bob, 4, 2, ink(o.c));
+  ellipse(ctx, x + 4, FLOOR - 3 - bob, 3, 1, o.c);
+  disc(ctx, x + 6, FLOOR - 6 - bob, 2, ink(o.c));
+  disc(ctx, x + 6, FLOOR - 6 - bob, 1, o.c);
+  dot(ctx, x + 6, FLOOR - 7 - bob, '#2a1a10');
+  rect(ctx, x + 8, FLOOR - 6 - bob, 2, 1, '#f39c34');
+  dot(ctx, x + 2, FLOOR - 4 - bob, light(o.c, 0.2));
+};
+
 function drawResource(ctx: Ctx, kind: ResourceKind, x: number, y: number) {
   const c = RESOURCE_COLORS[kind];
   switch (kind) {
@@ -323,6 +399,26 @@ function drawResource(ctx: Ctx, kind: ResourceKind, x: number, y: number) {
       disc(ctx, x + 3, y - 3, 1, c);
       dot(ctx, x + 1, y - 5, c);
       dot(ctx, x + 5, y - 5, c);
+      break;
+    case 'bioplastic':
+      // a little green sheet, curled at one corner
+      rect(ctx, x, y - 4, 6, 3, dark(c, 0.15));
+      rect(ctx, x, y - 4, 5, 2, c);
+      dot(ctx, x + 5, y - 4, light(c, 0.2));
+      break;
+    case 'wire':
+      // a copper coil
+      for (let i = 0; i < 3; i++) {
+        rect(ctx, x + i * 2, y - 4, 1, 3, c);
+        dot(ctx, x + i * 2 + 1, y - (i % 2 ? 2 : 4), light(c, 0.15));
+      }
+      dot(ctx, x + 6, y - 2, c);
+      break;
+    case 'glass':
+      // a clear pane with a glint
+      rect(ctx, x, y - 5, 6, 4, ink(c));
+      rect(ctx, x + 1, y - 4, 4, 2, c);
+      dot(ctx, x + 1, y - 4, '#ffffff');
       break;
   }
 }
@@ -373,6 +469,11 @@ export const OBJECT_DRAWERS: Record<ObjectKind, Drawer> = {
   lamp,
   rug,
   plant_pot: plantPot,
+  tablet,
+  pillow,
+  blocks,
+  top,
+  duck,
   resource,
 };
 
@@ -380,7 +481,7 @@ export const OBJECT_DRAWERS: Record<ObjectKind, Drawer> = {
 export function objectZ(k: ObjectKind): number {
   if (k === 'rug') return 0;
   if (k === 'tree' || k === 'bookshelf' || k === 'lamp') return 1;
-  if (k === 'resource' || k === 'ball' || k === 'yarn' || k === 'plushie' || k === 'food_bowl') return 3;
+  if (k === 'resource' || k === 'ball' || k === 'yarn' || k === 'plushie' || k === 'food_bowl' || k === 'tablet' || k === 'blocks' || k === 'top' || k === 'duck') return 3;
   return 2;
 }
 

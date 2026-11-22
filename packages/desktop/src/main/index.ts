@@ -63,6 +63,8 @@ function worldInfo(): WorldInfo {
     inventory: s.pet.inventory,
     appearance: s.pet.appearance,
     look: s.look(),
+    shelves: s.shelves().map((o) => ({ id: o.id, books: o.data?.books ?? [] })),
+    reading: s.pet.book,
   };
 }
 
@@ -274,6 +276,12 @@ function registerIpc() {
     pushWorld();
   });
   handle('giveTreat', () => host.sim.giveTreat('cookie', 'you', 'owner'));
+  handle('restockShelf', async (id: unknown, topic: unknown) => {
+    if (!isStr(id, 80)) return { ok: false, count: 0, source: '', topic: '', error: 'invalid' };
+    const r = await host.restockShelf(id, isStr(topic, 60) ? topic : '');
+    pushWorld();
+    return { ok: r.ok, count: r.books.length, source: r.source, topic: r.topic, error: r.error };
+  });
 
   handle('setSkin', (id: unknown) => isStr(id, 80) && host.sim.setSkin(id));
   handle('setShape', (id: unknown) => isStr(id, 80) && host.sim.setShape(id));

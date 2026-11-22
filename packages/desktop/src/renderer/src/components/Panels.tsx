@@ -23,7 +23,7 @@ export function Panel({ title, onClose, children, wide }: { title: string; onClo
 
 export function DropBoxPanel({ world, onClose }: { world: WorldInfo; onClose: () => void }) {
   const { dropBox, appearance, inventory } = world;
-  const giftables: ObjectKind[] = ['ball', 'yarn', 'plushie', 'flowers', 'bush', 'plant_pot', 'lamp', 'bed', 'bookshelf', 'workbench'];
+  const giftables: ObjectKind[] = ['tablet', 'pillow', 'ball', 'yarn', 'plushie', 'blocks', 'top', 'duck', 'flowers', 'bush', 'plant_pot', 'lamp', 'bed', 'bookshelf', 'workbench'];
   return (
     <Panel title="📦 Drop box" onClose={onClose} wide>
       <p className="muted">

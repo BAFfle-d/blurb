@@ -35,6 +35,10 @@ export interface PublicObject {
   b?: number;
   /** Badge count (drop box items waiting, unread comm notes). */
   u?: number;
+  /** 1 = being carried by Blurb (draw in its arms, not on the floor). */
+  cr?: 1;
+  /** Variant seed (bookshelf spines change when restocked). */
+  v?: number;
 }
 
 /** Abstract activity labels for when Blurb is out on the owner's desktop. */
@@ -51,6 +55,8 @@ export interface PublicPet {
   activity: Activity | PublicDesktopActivity;
   emotion: Emotion;
   gesture?: Gesture;
+  /** Title/author of the book Blurb is reading (public: it's from its shelf). */
+  book?: { title: string; author?: string };
   needs: Needs;
   appearance: Appearance;
   palette: BlobPalette;
@@ -83,6 +89,8 @@ export function toPublicObject(o: WorldObject): PublicObject {
   if (o.data?.resource) p.r = o.data.resource;
   if (o.data?.bounce) p.b = q1(o.data.bounce);
   if (o.data?.unread) p.u = o.data.unread;
+  if (o.data?.carried) p.cr = 1;
+  if (o.data?.shelfSeed) p.v = o.data.shelfSeed;
   return p;
 }
 
@@ -114,6 +122,7 @@ export function toPublicState(
       activity: out ? DESKTOP_ACTIVITY[pet.activity] ?? 'wandering' : pet.activity,
       emotion: pet.emotion,
       gesture: !out && pet.gesture && pet.gestureUntil > now ? pet.gesture : undefined,
+      book: !out && pet.book ? { title: pet.book.title.slice(0, 120), author: pet.book.author?.slice(0, 80) } : undefined,
       needs: {
         energy: q(pet.needs.energy),
         fullness: q(pet.needs.fullness),
