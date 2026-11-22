@@ -1,9 +1,52 @@
 import type { ReactNode } from 'react';
-import { OBJECT_DEFS, RESOURCE_KINDS, type FanMode, type ObjectKind } from '@blurb/shared';
+import { BEHAVIOR_DEFS, OBJECT_DEFS, RESOURCE_KINDS, recipeText, type Blueprint, type FanMode, type ObjectKind, type ResourceKind } from '@blurb/shared';
 import type { ModerationItem } from '@blurb/host';
 import { api } from '../api';
 import type { WorldInfo } from '../../../ipc-types';
-import { BlobThumb, ObjectThumb } from './Thumbs';
+import { BlobThumb, BlueprintThumb, ObjectThumb } from './Thumbs';
+
+/** A design's recipe as chips: what Blurb has vs. what it needs. */
+function RecipeChips({ bp, world }: { bp: Blueprint; world: WorldInfo }) {
+  return (
+    <ul className="chips recipe">
+      {Object.entries(bp.recipe).map(([k, n]) => {
+        const have = world.inventory.resources[k as ResourceKind] ?? 0;
+        return (
+          <li key={k} className={`chip ${have >= (n ?? 0) ? 'have' : 'short'}`} title={`Blurb has ${have}`}>
+            <ObjectThumb kind={`resource:${k}` as `resource:stick`} size={16} /> {recipeText({ [k]: n })}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function InventionLetter({ noteId, bp, status, world }: { noteId: string; bp: Blueprint; status: string; world: WorldInfo }) {
+  const built = world.built.includes(bp.id);
+  return (
+    <div className="approval invention">
+      <BlueprintThumb bp={bp} size={96} />
+      <div className="invention-info">
+        <strong>{bp.name}</strong>
+        <span className="muted">{BEHAVIOR_DEFS[bp.behavior].label}</span>
+        <span className="muted">
+          Learned from <em>{bp.learnedFrom}</em> · goes in the {bp.zone === 'house' ? 'storage room' : 'yard'}
+        </span>
+        <RecipeChips bp={bp} world={world} />
+      </div>
+      <div className="approval-actions">
+        {status === 'pending' ? (
+          <div className="row">
+            <button className="primary" onClick={() => void api.decideInvention(noteId, true)}>Approve build</button>
+            <button onClick={() => void api.decideInvention(noteId, false)}>Decline</button>
+          </div>
+        ) : (
+          <span className={`status ${status}`}>{status === 'approved' ? (built ? 'built ✓' : 'approved: gathering') : status}</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function Panel({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
@@ -77,7 +120,34 @@ export function DropBoxPanel({ world, onClose }: { world: WorldInfo; onClose: ()
           </button>
         ))}
       </div>
-      <h3>Blurb’s bag</h3>
+      <h3>Inventions</h3>
+      {!world.blueprints.length && !world.ideas.some((i) => i.status !== 'designed') && (
+        <p className="muted">
+          None yet. Blurb gets ideas on its own, or ask in chat (“invent a storage box”). It reads about the idea on its tablet, designs it at the computer, and sends you
+          a letter to approve.
+        </p>
+      )}
+      <ul className="inventions">
+        {world.ideas
+          .filter((i) => i.status !== 'designed')
+          .map((i) => (
+            <li key={i.topic}>
+              💡 <strong>{i.topic}</strong>{' '}
+              <span className="muted">{i.status === 'curious' ? '— wants to read about it on the tablet' : `— read “${i.learnedTitle}”, ready to design`}</span>
+              {i.source === 'owner' && <small> (your idea)</small>}
+            </li>
+          ))}
+        {world.blueprints.map((b) => (
+          <li key={b.id} className="bp-row">
+            <BlueprintThumb bp={b} size={40} />
+            <strong>{b.name}</strong>
+            <span className={`status ${b.status}`}>
+              {b.status === 'approved' ? (world.built.includes(b.id) ? 'built' : 'approved: gathering') : b.status === 'pending' ? 'waiting for you' : 'declined'}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <h3>Blurb’s bag <small className="muted">(holds up to {world.resourceCap} of each)</small></h3>
       <ul className="chips">
         {Object.entries(inventory.resources)
           .filter(([, n]) => (n ?? 0) > 0)
@@ -99,12 +169,17 @@ export function CommBoxPanel({ world, onClose }: { world: WorldInfo; onClose: ()
   return (
     <Panel title="✉️ Comm box" onClose={onClose}>
       {world.outbox > 0 && <p className="muted">Blurb is on the way with {world.outbox} more note{world.outbox > 1 ? 's' : ''}…</p>}
-      {!notes.length && <p className="muted">No notes yet. When Blurb designs something at the computer, its approval request shows up here.</p>}
+      {!notes.length && <p className="muted">No notes yet. When Blurb designs something at the computer (a new shape, or an invention), its approval request shows up here.</p>}
       <div className="notes">
         {notes.map((n) => (
           <article key={n.id} className={`note ${n.read ? '' : 'unread'}`}>
             <time>{new Date(n.createdAt).toLocaleString()}</time>
             <p>{n.text}</p>
+            {n.invention &&
+              (() => {
+                const bp = world.blueprints.find((b) => b.id === n.invention!.blueprintId);
+                return bp ? <InventionLetter noteId={n.id} bp={bp} status={n.invention!.status} world={world} /> : null;
+              })()}
             {n.request && (
               <div className="approval">
                 <BlobThumb palette={world.look.palette} shape={world.look.shape} size={64} />

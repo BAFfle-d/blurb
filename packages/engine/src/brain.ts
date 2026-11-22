@@ -11,7 +11,14 @@ import {
   OBJECT_DEFS,
   WORLD,
   canAfford,
+  defOf,
+  getBlueprint,
+  type BlueprintBase,
+  type BlueprintDetail,
   type CapabilitySet,
+  type Idea,
+  type InventionBehavior,
+  type ResourceKind,
   type DropBox,
   type Emotion,
   type Inventory,
@@ -31,6 +38,14 @@ export interface BrainContext {
   /** seconds since the last computer session */
   sinceCoding: number;
   rng: () => number;
+  /** An idea is waiting to be looked up on the tablet. */
+  wantsResearch?: boolean;
+  /** A researched idea is waiting to be designed at the computer. */
+  wantsDesign?: boolean;
+  /** An approved invention can be built right now. */
+  buildable?: boolean;
+  /** Resources still missing for an approved invention. */
+  gathering?: Partial<Record<ResourceKind, number>>;
 }
 
 export interface Choice {
@@ -44,7 +59,7 @@ export interface Choice {
 const isNight = (h: number) => h >= 22 || h < 7;
 
 export function interactionX(o: WorldObject): number {
-  const def = OBJECT_DEFS[o.kind];
+  const def = defOf(o);
   switch (o.kind) {
     case 'bed':
       return o.x + 32;
@@ -83,9 +98,11 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
   const out: Choice[] = [];
   const totalRes = Object.values(pet.inventory.resources).reduce((a, b) => a + (b ?? 0), 0);
 
+  const gather = ctx.gathering ?? {};
+  const needs = (...rs: ResourceKind[]) => rs.some((r) => (gather[r] ?? 0) > 0);
   for (const o of objects) {
     if (o.data?.carried) continue;
-    const def = OBJECT_DEFS[o.kind];
+    const def = defOf(o);
     let s = -Infinity;
     let reason = '';
     switch (o.kind) {
@@ -102,8 +119,13 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
         reason = 'curious';
         break;
       case 'computer':
-        s = ctx.sinceCoding < 150 ? -Infinity : n.curiosity * 0.5 + n.boredom * 0.35;
-        reason = 'wants to tinker';
+        if (ctx.wantsDesign && ctx.sinceCoding >= 60) {
+          s = 45 + n.curiosity * 0.5;
+          reason = 'wants to design an invention';
+        } else {
+          s = ctx.sinceCoding < 150 ? -Infinity : n.curiosity * 0.5 + n.boredom * 0.35;
+          reason = 'wants to tinker';
+        }
         break;
       case 'trampoline':
       case 'slide':
@@ -112,9 +134,20 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
         break;
       case 'tablet':
         // Read when curious, watch a movie when bored; a little novelty bonus.
-        s = Math.max(n.curiosity * 0.55, n.boredom * 0.6) + 6;
-        reason = n.boredom > n.curiosity ? 'wants to watch a movie' : 'wants to read';
+        s = Math.max(n.curiosity * 0.55, n.boredom * 0.6) + 6 + (ctx.wantsResearch ? 40 : 0);
+        reason = ctx.wantsResearch ? 'wants to look something up' : n.boredom > n.curiosity ? 'wants to watch a movie' : 'wants to read';
         break;
+      case 'invention': {
+        const beh = getBlueprint(o.data?.blueprintId)?.behavior;
+        if (beh === 'storage') s = 8 + n.boredom * 0.35 + (totalRes > 20 ? 12 : 0);
+        else if (beh === 'wardrobe') s = caps.change_skin && ctx.dropBox.skins.length > 1 ? 6 + n.boredom * 0.5 : -Infinity;
+        else if (beh === 'seat') s = n.energy < 70 ? (100 - n.energy) * 0.55 : -Infinity;
+        else if (beh === 'bed') s = n.energy > 85 ? -Infinity : Math.pow(100 - n.energy, 1.5) / 10 + (isNight(ctx.hour) ? 30 : 0);
+        else if (beh === 'toy') s = n.boredom * 0.8 + (o.data?.bounce ? 45 : 0);
+        else if (beh === 'reading') s = n.curiosity * 0.6 + n.boredom * 0.2 + 4;
+        reason = beh ? `wants to use the ${def.label.toLowerCase()}` : '';
+        break;
+      }
       case 'ball':
       case 'yarn':
       case 'blocks':
@@ -134,19 +167,24 @@ export function scoreChoices(ctx: BrainContext): Choice[] {
         reason = 'has a note to deliver';
         break;
       case 'workbench':
-        if (caps.build_copies && affordableBuild(objects, pet.inventory)) s = 25 + n.boredom * 0.45;
-        reason = 'wants to build';
+        if (caps.build_copies && (ctx.buildable || affordableBuild(objects, pet.inventory))) s = 25 + n.boredom * 0.45 + (ctx.buildable ? 45 : 0);
+        reason = ctx.buildable ? 'wants to build an invention' : 'wants to build';
         break;
       case 'tree':
-      case 'bush':
-        if (caps.forage && (o.data?.regrowIn ?? 0) <= 0 && totalRes < 14)
-          s = 12 + n.curiosity * 0.3 + n.boredom * 0.25 + (o.kind === 'bush' && n.fullness < 40 ? 20 : 0);
-        reason = 'foraging';
+      case 'bush': {
+        // Gathering for an approved invention beats the usual "I have enough" limit.
+        const forInvention = o.kind === 'tree' ? needs('stick', 'leaf') : needs('berry', 'leaf');
+        if (caps.forage && (o.data?.regrowIn ?? 0) <= 0 && (totalRes < 14 || forInvention))
+          s = 12 + n.curiosity * 0.3 + n.boredom * 0.25 + (o.kind === 'bush' && n.fullness < 40 ? 20 : 0) + (forInvention ? 25 : 0);
+        reason = forInvention ? 'gathering for an invention' : 'foraging';
         break;
-      case 'resource':
-        if (totalRes < 20) s = 30;
-        reason = 'found something';
+      }
+      case 'resource': {
+        const wanted = needs((o.data?.resource ?? 'pebble') as ResourceKind);
+        if (totalRes < 20 || wanted) s = 30 + (wanted ? 25 : 0);
+        reason = wanted ? 'needs that for an invention' : 'found something';
         break;
+      }
     }
     if (!def.activity && o.kind !== 'resource') continue;
     if (!Number.isFinite(s)) continue;
@@ -206,6 +244,11 @@ export const PHRASES: Record<string, string[]> = {
   dropped: ['Whoa!', 'Boing!', 'Again! Again!'],
   denied: ['Hmm, I\'m not allowed to do that.', 'That\'s not one of my powers.'],
   approved: ['My new shape got approved!! Thank you!', 'Yay, new look unlocked!'],
+  idea: ['Ooh, an idea: a {thing}! I should read up on it first.', 'Hmm… what if I made a {thing}?', 'I want to invent a {thing}! To the tablet!'],
+  design: ['Time to design my {thing}!', 'Drawing up plans for a {thing}…', 'Blueprint time: {thing}!'],
+  invented: ['Ta-da! My very own {thing}!', 'I built the {thing}! It works!', 'Workshop magic: one {thing}!'],
+  tidy: ['Everything in its place!', 'So tidy!', 'Neat and organized.'],
+  sit: ['Ahh, a nice sit.', 'Comfy!', 'Just resting my feet.'],
   rejected: ['Aw, back to the drawing board.', 'Okay, I\'ll design something better.'],
   hello_desktop: ['Ooh, the big world!', 'Out for a stroll!', 'Hi from your desktop!'],
   hungry_desktop: ['Psst… my food bowl is back home.', 'Could you open my window? Snack time!'],
@@ -266,4 +309,76 @@ export function ruleProgram(objects: WorldObject[], dropBox: DropBox, caps: Capa
   if (!options.length) return [{ op: 'note', text: 'I sat at the computer but all my tinkering powers are switched off!' }];
   const n = 1 + Math.floor(rng() * 2);
   return Array.from({ length: n }, () => pick(options)());
+}
+
+// ---------------------------------------------------------------------------
+// Rule-based inventing (no LLM): turn a researched idea into a design
+// ---------------------------------------------------------------------------
+
+interface DesignTemplate {
+  re: RegExp;
+  behavior: InventionBehavior;
+  base: BlueprintBase;
+  details: BlueprintDetail[];
+  width: number;
+  height: number;
+  recipe: Partial<Record<ResourceKind, number>>;
+  color: string;
+  accent: string;
+  zone?: 'house' | 'yard';
+  description: string;
+}
+
+/** Most specific first: "toy chest" is storage, "reading chair" is a seat. */
+const TEMPLATES: DesignTemplate[] = [
+  { re: /closet|wardrobe|armoire|dresser|cupboard|costume/, behavior: 'wardrobe', base: 'tall', details: ['doors', 'knobs', 'legs'], width: 24, height: 46, recipe: { stick: 6, wire: 2, pebble: 2 }, color: '#8a5a3b', accent: '#e0b23a', description: 'A tall closet to keep my outfits in.' },
+  { re: /chair|stool|sofa|couch|seat|beanbag|throne|ottoman/, behavior: 'seat', base: 'box', details: ['cushion', 'legs'], width: 18, height: 14, recipe: { stick: 3, fluff: 2 }, color: '#c0583a', accent: '#f2d0a4', description: 'A comfy seat for resting my feet.' },
+  { re: /bed|hammock|cot|nest|bunk|futon/, behavior: 'bed', base: 'box', details: ['cushion', 'legs'], width: 34, height: 11, recipe: { stick: 4, fluff: 4 }, color: '#6b8fd6', accent: '#f4f0e6', description: 'A cozy little bed for naps.' },
+  { re: /nook|library|bookcase|lectern|reading|desk/, behavior: 'reading', base: 'shelf', details: ['cushion'], width: 22, height: 32, recipe: { stick: 5, leaf: 2 }, color: '#7a5233', accent: '#f2d0a4', description: 'A snug spot to read my books.' },
+  { re: /box|chest|crate|trunk|bin|storage|basket|bag|jar|cabinet|drawer|locker|bucket/, behavior: 'storage', base: 'chest', details: ['handles'], width: 26, height: 16, recipe: { stick: 4, pebble: 2 }, color: '#a0703c', accent: '#e0b23a', description: 'A sturdy box to keep my sticks and pebbles in.' },
+  { re: /ball|toy|kite|puzzle|drum|game|spinner|marble|rattle|yo ?yo/, behavior: 'toy', base: 'round', details: ['stripes'], width: 10, height: 10, recipe: { fluff: 2, leaf: 1 }, color: '#e8303a', accent: '#f5d442', description: 'A new toy to play with.' },
+  { re: /birdhouse|bird house|feeder|planter|fountain|statue|sundial|scarecrow|gnome|garden/, behavior: 'decor', base: 'box', details: ['window', 'lid'], width: 14, height: 18, recipe: { stick: 3, pebble: 2 }, color: '#b5793f', accent: '#d94f3d', zone: 'yard', description: 'Something nice for the yard.' },
+];
+const DEFAULT_TEMPLATE: DesignTemplate = { re: /./, behavior: 'decor', base: 'round', details: ['stripes'], width: 14, height: 18, recipe: { pebble: 2, leaf: 2 }, color: '#7fb3d5', accent: '#f5d442', description: 'A little something to make the house nicer.' };
+
+const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+/** A one-op program that designs the idea from a template. */
+export function ruleDesign(idea: Pick<Idea, 'topic' | 'learnedTitle'>, rng: () => number): unknown[] {
+  const t = TEMPLATES.find((x) => x.re.test(idea.topic)) ?? DEFAULT_TEMPLATE;
+  const wobble = (v: number) => Math.round(v * (0.9 + rng() * 0.2));
+  return [
+    {
+      op: 'invent',
+      name: titleCase(idea.topic),
+      learnedFrom: idea.learnedTitle,
+      behavior: t.behavior,
+      base: t.base,
+      width: wobble(t.width),
+      height: wobble(t.height),
+      color: t.color,
+      accent: t.accent,
+      details: t.details,
+      recipe: t.recipe,
+      zone: t.zone ?? 'house',
+      description: t.description,
+    },
+  ];
+}
+
+/** Things Blurb might want, based on what's going on in its life. */
+export function selfIdea(
+  c: { inventory: Inventory; cap: number; skins: number; books: number; has: (name: string) => boolean },
+  rng: () => number,
+): string | undefined {
+  const counts = Object.values(c.inventory.resources).map((v) => v ?? 0);
+  const total = counts.reduce((a, b) => a + b, 0);
+  const most = Math.max(0, ...counts);
+  const options: string[] = [];
+  if (most >= c.cap * 0.6 || total >= 30) options.push('storage box');
+  if (c.skins >= 4) options.push('closet');
+  if (c.books >= 4) options.push('reading nook');
+  if (!options.length && rng() < 0.3) options.push('armchair', 'toy chest', 'birdhouse');
+  const open = options.filter((o) => !c.has(o));
+  return open.length ? open[Math.floor(rng() * open.length)] : undefined;
 }

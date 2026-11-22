@@ -37,6 +37,9 @@ export const ACTIVITIES = [
   'watching',
   'jumping',
   'sliding',
+  'organizing',
+  'dressing',
+  'resting',
   'coding',
   'playing',
   'building',
@@ -213,6 +216,7 @@ export const OBJECT_KINDS = [
   'blocks',
   'top',
   'duck',
+  'invention',
   'resource',
 ] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
@@ -254,6 +258,8 @@ export interface WorldObjectData {
   books?: BookRef[];
   /** bookshelf: changes when restocked, so the spines change color. */
   shelfSeed?: number;
+  /** invention: which approved blueprint this is. */
+  blueprintId?: string;
 }
 
 export interface WorldState {
@@ -327,6 +333,8 @@ export interface CommNote {
   text: string;
   /** If set, the note is an approval request. */
   request?: ApprovalRequest;
+  /** If set, the note asks to approve an invention design. */
+  invention?: { blueprintId: string; status: ApprovalStatus; decidedAt?: number };
   read: boolean;
 }
 
@@ -425,6 +433,7 @@ export const CAPABILITIES = [
   'sit_on_windows',
   'screen_questions',
   'jump',
+  'invent',
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 

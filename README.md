@@ -84,6 +84,30 @@ Data flow:
 
 - **Playground:** a trampoline (Blurb bounces) and a slide (climbs the ladder, whooshes down). Jumping is its own ability: Settings → Abilities → *Jump on the trampoline and play on the slide*.
 
+### Inventions
+
+Blurb can make things that didn't exist in its world, the slow way:
+
+1. **An idea.** You ask in chat ("invent a storage box", "can you build me a closet?"), or Blurb notices it needs one: a full bag suggests a storage box, lots of skins suggest a closet, lots of reading suggests a reading nook.
+2. **Research.** Blurb takes its tablet and reads about it: a Wikipedia article on exactly that topic, or a real book about it from Open Library. Research never falls back to a random article. Offline, it retries every few minutes and, after three tries, leaves you a note.
+3. **Design.** At the computer, Blurb (the AI, or the rule brain without one) designs it from a fixed menu: a base shape (box, chest, cabinet, shelf, table, round, tall), up to four details (doors, drawers, handles, legs, lid, shelves, stripes, window, knobs, cushion), size, colors, and a recipe from the eight existing resources.
+4. **A letter.** The design arrives in the comm box with a picture, what it does, which article it learned from, and the recipe (chips show what Blurb already has). **Approve build** or **Decline**.
+5. **Build.** Once approved, Blurb gathers what's missing. It forages sticks, leaves and berries itself and asks you for the rest. Then it builds the invention at the workbench. Indoor inventions go in the storage room.
+
+**An invention is a new *thing*, never a new *power*.** Every design has to pick one behavior Blurb already has:
+
+| Behavior | What Blurb does with it |
+|---|---|
+| storage | tidies up; each one raises how much Blurb can carry by 20 of each resource |
+| wardrobe | changes into another skin from the drop box |
+| seat | sits and rests |
+| bed | naps |
+| toy | plays |
+| reading | reads a book from its shelf there |
+| decor | just looks nice |
+
+A design that names a behavior outside this list ("flying") is rejected by the validator. So is one that cites something Blurb hasn't read, uses resources that don't exist, or is over the size and recipe limits. At most three designs can wait for you at once. Turn the whole thing off with Settings → Abilities → *Invent new things*. Fans only ever see built inventions, never pending designs, recipes or what Blurb read.
+
 - **Bookshelf, with real books.** It fills itself from [Open Library](https://openlibrary.org) on cozy topics (or your favorites, in Settings → Behavior). Blurb reads each book's real description and reacts. To restock, right-click the shelf → **New books**, optionally with a topic. Offline, it falls back to public-domain classics.
 - **Tablet.** Blurb carries it somewhere cozy, then reads Wikipedia (and remembers what it learned) or watches a movie. It's built from bioplastic, wire and glass.
 - **Pillow.** The plushie sits on it, and Blurb tucks it in after playing, always at bedtime. The plushie is Blurb's friend, so it can never be transformed into anything else.
@@ -94,7 +118,7 @@ Only the topic is sent to Open Library and Wikipedia. Nothing about you is.
 
 ## The rules you gave Blurb, and how they're enforced
 
-**"Blurb can do basic coding … but cannot give itself new abilities."** When Blurb sits at its computer, the LLM is asked for a short JSON program in *BlurbScript*. That program is **data, not code**: it's parsed and every instruction is checked against a closed whitelist plus your capability switches before the engine applies it. There is no `eval`, and the grammar has no instruction for flying, inventing object kinds, files, apps or the network — so "can't give itself new powers" is a property of the grammar, not a promise in a prompt.
+**"Blurb can do basic coding … but cannot give itself new abilities."** When Blurb sits at its computer, the LLM is asked for a short JSON program in *BlurbScript*. That program is **data, not code**: it's parsed and every instruction is checked against a closed whitelist plus your capability switches before the engine applies it. There is no `eval`, and the grammar has no instruction for flying, files, apps or the network — so "can't give itself new powers" is a property of the grammar, not a promise in a prompt. The one instruction that makes something new, `invent`, can only combine fixed parts with one of seven existing behaviors, and nothing is built until you approve it (see *Inventions* above).
 
 | Instruction | What it can do | Limits |
 |---|---|---|
@@ -172,7 +196,7 @@ Put it behind Caddy/nginx for TLS (`wss://`), set `TRUST_PROXY=1` only then. See
 ## What's verified, and what isn't
 
 Verified in this repo's CI-style run (Linux, headless):
-- 59 unit/integration tests, including the end-to-end privacy test and a full moderation round trip.
+- 107 unit/integration tests, including the end-to-end privacy test, a full moderation round trip, and the invention pipeline from idea to built object.
 - The Electron app built and launched under Xvfb: chat (rule brain), skin change by chat, comm-box approval → shape appears in drop box and is worn, drop box, settings, the overlay window (always-on-top, non-focusable, transparent) and its radial menu.
 - The fan page at desktop and phone widths, no console errors, no horizontal overflow.
 

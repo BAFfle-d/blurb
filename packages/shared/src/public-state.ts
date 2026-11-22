@@ -9,6 +9,7 @@
  * private speech (owner chat, screen Q&A), image attachments, settings, keys,
  * memory, the comm box, or anything else not listed below.
  */
+import type { PublicBlueprint } from './blueprints.js';
 import type {
   Activity,
   Appearance,
@@ -39,6 +40,8 @@ export interface PublicObject {
   cr?: 1;
   /** Variant seed (bookshelf spines change when restocked). */
   v?: number;
+  /** Invention: which blueprint to draw. */
+  bp?: string;
 }
 
 /** Abstract activity labels for when Blurb is out on the owner's desktop. */
@@ -71,6 +74,8 @@ export interface PublicState {
   pet: PublicPet;
   objects: PublicObject[];
   fanMode: FanMode;
+  /** How to draw invented objects that are in the world. */
+  blueprints?: PublicBlueprint[];
 }
 
 const DESKTOP_ACTIVITY: Partial<Record<Activity, PublicDesktopActivity>> = {
@@ -91,6 +96,7 @@ export function toPublicObject(o: WorldObject): PublicObject {
   if (o.data?.unread) p.u = o.data.unread;
   if (o.data?.carried) p.cr = 1;
   if (o.data?.shelfSeed) p.v = o.data.shelfSeed;
+  if (o.data?.blueprintId) p.bp = o.data.blueprintId;
   return p;
 }
 
@@ -100,6 +106,7 @@ export function toPublicState(
   look: { palette: BlobPalette; shape: ShapeSpec },
   fanMode: FanMode,
   now: number,
+  blueprints: PublicBlueprint[] = [],
 ): PublicState {
   const out = pet.mode === 'overlay';
   const speech =
@@ -137,6 +144,8 @@ export function toPublicState(
     },
     objects: world.objects.map(toPublicObject),
     fanMode,
+    // Only designs that are actually built, so pending ideas stay private.
+    blueprints: blueprints.filter((b) => world.objects.some((o) => o.data?.blueprintId === b.id)),
   };
 }
 
@@ -156,6 +165,7 @@ export interface PublicDelta {
   remove?: string[];
   timeOfDay?: number;
   fanMode?: FanMode;
+  blueprints?: PublicBlueprint[];
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -189,6 +199,7 @@ export function diffPublicState(prev: PublicState, next: PublicState): PublicDel
   if (remove.length) (d.remove = remove), (changed = true);
   if (prev.timeOfDay !== next.timeOfDay) (d.timeOfDay = next.timeOfDay), (changed = true);
   if (prev.fanMode !== next.fanMode) (d.fanMode = next.fanMode), (changed = true);
+  if (!sameJson(prev.blueprints ?? [], next.blueprints ?? [])) (d.blueprints = next.blueprints ?? []), (changed = true);
   return changed ? d : null;
 }
 
@@ -214,5 +225,6 @@ export function applyPublicDelta(state: PublicState, d: PublicDelta): PublicStat
     pet: pet as unknown as PublicPet,
     objects,
     fanMode: d.fanMode ?? state.fanMode,
+    blueprints: d.blueprints ?? state.blueprints,
   };
 }

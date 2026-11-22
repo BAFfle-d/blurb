@@ -1,7 +1,7 @@
 /** Tiny canvases: a blob in a given skin/shape, or a world object. */
 import { useEffect, useRef } from 'react';
-import { DEFAULT_POSE, OBJECT_DRAWERS, drawResource, getSprite, type Pose } from '@blurb/render';
-import { OBJECT_DEFS, WORLD, type BlobPalette, type ObjectKind, type ResourceKind, type ShapeSpec } from '@blurb/shared';
+import { DEFAULT_POSE, OBJECT_DRAWERS, drawBlueprint, drawResource, getSprite, type Pose } from '@blurb/render';
+import { OBJECT_DEFS, WORLD, type BlobPalette, type ObjectKind, type PublicBlueprint, type ResourceKind, type ShapeSpec } from '@blurb/shared';
 
 export function BlobThumb({ palette, shape, size = 56, pose }: { palette: BlobPalette; shape: ShapeSpec; size?: number; pose?: Partial<Pose> }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -46,5 +46,29 @@ export function ObjectThumb({ kind, color, size = 40 }: { kind: ObjectKind | `re
     else OBJECT_DRAWERS[k](ctx, { id: 'thumb', k, x: 0, c: color ?? def.defaultColor, s: k === 'food_bowl' ? 2 : undefined }, { t: 0, night: 0 });
     ctx.restore();
   }, [kind, color, size]);
+  return <canvas ref={ref} className="pix" width={size} height={size} aria-hidden />;
+}
+
+/** An invention drawn from its blueprint (works for designs that aren't built yet). */
+export function BlueprintThumb({ bp, size = 64 }: { bp: PublicBlueprint; size?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current!;
+    const ctx = c.getContext('2d')!;
+    c.width = size;
+    c.height = size;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, size, size);
+    const w = bp.width + 2;
+    const h = bp.height + 4;
+    const raw = Math.min((size - 4) / w, (size - 4) / h);
+    const s = raw >= 1 ? Math.floor(raw) : raw;
+    ctx.save();
+    ctx.translate(size / 2, size - 2);
+    ctx.scale(s, s);
+    ctx.translate(-bp.width / 2, -WORLD.floorY);
+    drawBlueprint(ctx, bp, 0, WORLD.floorY);
+    ctx.restore();
+  }, [bp, size]);
   return <canvas ref={ref} className="pix" width={size} height={size} aria-hidden />;
 }

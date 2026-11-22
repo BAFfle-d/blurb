@@ -13,6 +13,7 @@
  * a closed instruction set.
  */
 import { OBJECT_DEFS, WORLD, zoneAt } from './catalog.js';
+import { BLUEPRINT_BASES, BLUEPRINT_DETAILS, INVENTION_BEHAVIORS, defOf, validateDesign, type Blueprint } from './blueprints.js';
 import { clampShape, normalizeColor } from './palettes.js';
 import type {
   CapabilitySet,
@@ -23,13 +24,14 @@ import type {
   ShapeSpec,
   WorldObject,
 } from './types.js';
-import { OBJECT_KINDS } from './types.js';
+import { OBJECT_KINDS, RESOURCE_KINDS } from './types.js';
 
 export type ProgramOp =
   | { op: 'recolor'; target: string; color: string }
   | { op: 'transform'; target: string; into: ObjectKind }
   | { op: 'move'; target: string; x: number }
-  | { op: 'build'; kind: ObjectKind; x: number; color?: string }
+  | { op: 'build'; kind: ObjectKind; x: number; color?: string; blueprint?: string }
+  | { op: 'invent'; design: Blueprint }
   | { op: 'set_skin'; skin: string }
   | { op: 'set_shape'; shape: string }
   | { op: 'design_shape'; name: string; spec: ShapeSpec }
@@ -44,6 +46,7 @@ export const PROGRAM_OPS = [
   'set_shape',
   'design_shape',
   'note',
+  'invent',
 ] as const;
 
 export const MAX_PROGRAM_OPS = 6;
@@ -53,6 +56,11 @@ export interface ProgramContext {
   dropBox: DropBox;
   capabilities: CapabilitySet;
   inventory: Inventory;
+  /** Titles Blurb has learned about (books, articles). Inventions need one. */
+  knowledge?: string[];
+  blueprints?: Blueprint[];
+  /** Set when this computer session is for designing a researched idea. */
+  design?: { topic: string; learnedTitle: string; summary?: string };
 }
 
 export interface RejectedOp {
@@ -87,6 +95,14 @@ export function describeProgramLanguage(ctx: ProgramContext): string {
     allowed.push(
       `{"op":"design_shape","name":"<name>","spec":{"width":18-40,"height":14-32,"peak":"round|pointy|flat","lean":-0.6..0.6,"feet":0-4,"ears":"none|nubs|tufts","gloss":true|false}} (owner must approve)`,
     );
+  if (c.invent && ctx.knowledge?.length) {
+    allowed.push(
+      `{"op":"invent","name":"<the thing>","learnedFrom":"<exactly one of: ${ctx.knowledge.slice(-12).join(' | ')}>","behavior":"${INVENTION_BEHAVIORS.join('|')}","base":"${BLUEPRINT_BASES.join('|')}","width":8-48,"height":6-60,"color":"#rrggbb","accent":"#rrggbb","details":[up to 4 of ${BLUEPRINT_DETAILS.join(',')}],"recipe":{"<resource>":1-8, up to 4 of ${RESOURCE_KINDS.join(',')}},"zone":"house|yard","description":"<one sentence>"} (your owner must approve it)`,
+    );
+  }
+  const approved = (ctx.blueprints ?? []).filter((b) => b.status === 'approved');
+  if (c.build_copies && approved.length)
+    allowed.push(`{"op":"build","kind":"invention","blueprint":"<one of: ${approved.map((b) => `${b.id} (${b.name})`).join(', ')}>","x":<number>} (costs its recipe)`);
   allowed.push(`{"op":"note","text":"<short note for your owner>"}`);
   return allowed.join('\n');
 }
@@ -154,7 +170,7 @@ export function canAfford(inv: Inventory, recipe: Partial<Record<ResourceKind, n
 export function validateOp(
   raw: unknown,
   ctx: ProgramContext,
-  pending: { spent: Partial<Record<ResourceKind, number>>; added: number },
+  pending: { spent: Partial<Record<ResourceKind, number>>; added: number; designs?: number },
 ): ProgramOp | RejectedOp {
   const reject = (reason: string): RejectedOp => ({ raw, reason });
   if (!isObj(raw)) return reject('not an instruction object');
@@ -197,7 +213,7 @@ export function validateOp(
       const o = findObject(ctx, raw.target);
       if (!o) return reject('no such object');
       if (typeof raw.x !== 'number' || !Number.isFinite(raw.x)) return reject('x must be a number');
-      const def = OBJECT_DEFS[o.kind];
+      const def = defOf(o);
       const x = Math.round(Math.min(WORLD.width - def.width, Math.max(0, raw.x)));
       const zone = zoneAt(x + def.width / 2);
       if (!def.zones.includes(zone)) return reject(`a ${def.label.toLowerCase()} has to stay in the ${def.zones.join('/')}`);
@@ -205,6 +221,24 @@ export function validateOp(
     }
     case 'build': {
       if (!caps.build_copies) return reject('building is turned off');
+      if (raw.kind === 'invention') {
+        const bp = (ctx.blueprints ?? []).find((b) => b.id === raw.blueprint);
+        if (!bp || bp.status !== 'approved') return reject("I can only build inventions my owner approved");
+        if (ctx.objects.length + pending.added >= WORLD.maxObjects) return reject('the world is full');
+        const remaining: Inventory = {
+          resources: Object.fromEntries(Object.entries(ctx.inventory.resources).map(([k, n]) => [k, (n ?? 0) - (pending.spent[k as ResourceKind] ?? 0)])),
+        };
+        if (!canAfford(remaining, bp.recipe)) {
+          const need = Object.entries(bp.recipe).map(([k, n]) => `${n} ${k}`).join(', ');
+          return reject(`not enough resources for my ${bp.name} (need ${need})`);
+        }
+        for (const [k, n] of Object.entries(bp.recipe)) pending.spent[k as ResourceKind] = (pending.spent[k as ResourceKind] ?? 0) + (n ?? 0);
+        pending.added++;
+        const rawX = typeof raw.x === 'number' && Number.isFinite(raw.x) ? raw.x : bp.zone === 'house' ? WORLD.backDoorX + 30 : WORLD.fieldX + 20;
+        let x = Math.round(Math.min(WORLD.width - bp.width, Math.max(0, rawX)));
+        if (zoneAt(x + bp.width / 2) !== bp.zone) x = bp.zone === 'house' ? WORLD.backDoorX + 20 : WORLD.fieldX + 20;
+        return { op, kind: 'invention', x, blueprint: bp.id };
+      }
       const kind = raw.kind;
       if (typeof kind !== 'string' || !(OBJECT_KINDS as readonly string[]).includes(kind))
         return reject('not a kind of thing that exists');
@@ -253,6 +287,22 @@ export function validateOp(
       if (!isObj(raw.spec)) return reject('a shape needs a spec');
       const name = typeof raw.name === 'string' ? sanitizeNote(raw.name).slice(0, 32) : '';
       return { op, name: name || 'Mystery Blob', spec: clampShape(raw.spec as Partial<ShapeSpec>) };
+    }
+    case 'invent': {
+      if (!caps.invent) return reject('inventing is turned off');
+      const d = validateDesign(
+        raw,
+        {
+          knowledge: ctx.knowledge ?? [],
+          existingNames: [...Object.values(OBJECT_DEFS).map((x) => x.label), ...(ctx.blueprints ?? []).filter((b) => b.status !== 'rejected').map((b) => b.name)],
+          pendingCount: (ctx.blueprints ?? []).filter((b) => b.status === 'pending').length + (pending.designs ?? 0),
+        },
+        `bp-${Math.random().toString(36).slice(2, 8)}`,
+        Date.now(),
+      );
+      if ('reason' in d) return reject(d.reason);
+      pending.designs = (pending.designs ?? 0) + 1;
+      return { op, design: d };
     }
     case 'note': {
       if (typeof raw.text !== 'string' || !raw.text.trim()) return reject('empty note');

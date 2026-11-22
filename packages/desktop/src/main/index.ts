@@ -65,6 +65,11 @@ function worldInfo(): WorldInfo {
     look: s.look(),
     shelves: s.shelves().map((o) => ({ id: o.id, books: o.data?.books ?? [] })),
     reading: s.pet.book,
+    blueprints: s.blueprints,
+    ideas: s.ideas,
+    knowledge: s.knowledge,
+    built: [...new Set(s.world.objects.map((o) => o.data?.blueprintId).filter((x): x is string => !!x))],
+    resourceCap: s.resourceCap(),
   };
 }
 
@@ -262,7 +267,7 @@ function registerIpc() {
   handle('place', (kind: unknown, x: unknown) => {
     if (!isStr(kind, 40) || !isNum(x)) return false;
     const k = kind as PlaceKind;
-    const ok = k.startsWith('resource:') ? (RESOURCE_KINDS as readonly string[]).includes(k.slice(9)) : (OBJECT_KINDS as readonly string[]).includes(k) && !OBJECT_DEFS[k as ObjectKind].unique && k !== 'resource';
+    const ok = k.startsWith('resource:') ? (RESOURCE_KINDS as readonly string[]).includes(k.slice(9)) : (OBJECT_KINDS as readonly string[]).includes(k) && !OBJECT_DEFS[k as ObjectKind].unique && k !== 'resource' && k !== 'invention';
     return ok ? !!host.sim.ownerPlace(k, x) : false;
   });
   handle('dropToBox', (item: unknown) => {
@@ -270,7 +275,7 @@ function registerIpc() {
     const count = Math.max(1, Math.min(20, Math.round(Number(i?.count) || 1)));
     if (i?.kind === 'resource' && (RESOURCE_KINDS as readonly string[]).includes(i.resource ?? ''))
       host.sim.addToDropBox({ kind: 'resource', resource: i.resource as ResourceKind, count, from: 'owner' });
-    else if (i?.kind === 'object' && (OBJECT_KINDS as readonly string[]).includes(i.objectKind ?? '') && !OBJECT_DEFS[i.objectKind as ObjectKind].unique)
+    else if (i?.kind === 'object' && (OBJECT_KINDS as readonly string[]).includes(i.objectKind ?? '') && !OBJECT_DEFS[i.objectKind as ObjectKind].unique && i.objectKind !== 'invention' && i.objectKind !== 'resource')
       host.sim.addToDropBox({ kind: 'object', objectKind: i.objectKind as ObjectKind, count, from: 'owner' });
     else if (i?.kind === 'treat') host.sim.addToDropBox({ kind: 'treat', count, from: 'owner' });
     pushWorld();
@@ -286,6 +291,11 @@ function registerIpc() {
   handle('setSkin', (id: unknown) => isStr(id, 80) && host.sim.setSkin(id));
   handle('setShape', (id: unknown) => isStr(id, 80) && host.sim.setShape(id));
   handle('decideShape', (id: unknown, ok: unknown) => isStr(id, 80) && host.sim.decideShape(id, ok === true));
+  handle('decideInvention', (id: unknown, ok: unknown) => {
+    const r = isStr(id, 80) && host.sim.decideInvention(id, ok === true);
+    pushWorld();
+    return r;
+  });
   handle('markNotesRead', () => {
     host.sim.markNotesRead();
     pushWorld();
