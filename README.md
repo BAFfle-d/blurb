@@ -33,7 +33,13 @@ ROOM_TOKENS=blurb:pick-a-long-random-token WEB_DIST=packages/web/dist npm run de
 PET_TOKEN=pick-a-long-random-token npm run headless
 ```
 
-If the Electron download is blocked on your network, set `ELECTRON_MIRROR` before `npm install`.
+The first `npm run dev:desktop` downloads Electron (about 100 MB) if `npm install` didn't. Recent npm versions skip dependency install scripts until you approve them, so Blurb fetches it itself. If that download is blocked on your network, set `ELECTRON_MIRROR`.
+
+**Windows notes**
+- If PowerShell says *"running scripts is disabled on this system"*, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once (or use `npm.cmd` instead of `npm`).
+- Prefer `git clone` over **Download ZIP**: a clone updates with `git pull`; a ZIP has to be downloaded again. Your pet's world, settings and memory live in your user profile, not the project folder, so switching copies keeps them.
+
+**Local AI that works well:** Ollama with `gemma4:12b` (can see images) or `llama3.2`. Thinking models like Gemma 4 and Qwen 3.x are fine: Blurb asks local servers to skip the thinking step, since a pet doesn't need it.
 
 ---
 
