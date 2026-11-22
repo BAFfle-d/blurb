@@ -1,5 +1,6 @@
 /** Native Anthropic Messages API adapter (streaming). */
-import { collect, explainError, LLMError, type GenerateOptions, type LLMMessage, type LLMProvider, type TestResult } from './provider.js';
+import { parseTagged } from '@blurb/shared';
+import { collect, explainError, LLMError, TEST_TIMEOUT_MS, type GenerateOptions, type LLMMessage, type LLMProvider, type TestResult } from './provider.js';
 import { readSSE } from './sse.js';
 
 export interface AnthropicOptions {
@@ -84,6 +85,7 @@ export class AnthropicProvider implements LLMProvider {
       if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta' && json.delta.text) yield json.delta.text;
       if (json.type === 'message_stop') return;
     }
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new LLMError('Request cancelled.');
   }
 
   complete(opts: GenerateOptions) {
@@ -99,15 +101,18 @@ export class AnthropicProvider implements LLMProvider {
 
   async test(): Promise<TestResult> {
     const t0 = Date.now();
+    const signal = AbortSignal.timeout(TEST_TIMEOUT_MS);
     try {
       if (!this.model) {
-        const models = await this.listModels();
+        const models = await this.listModels(signal);
         return { ok: true, message: `Connected. ${models.length} models available — pick one.`, latencyMs: Date.now() - t0 };
       }
-      const reply = await this.complete({ messages: [{ role: 'user', content: 'Reply with just the word: ready' }], maxTokens: 8, temperature: 0 });
-      return { ok: true, message: `Connected to ${this.model}: "${reply.trim().slice(0, 40)}"`, latencyMs: Date.now() - t0 };
+      const reply = await this.complete({ messages: [{ role: 'user', content: 'Reply with just the word: ready' }], maxTokens: 8, temperature: 0, signal });
+      if (!reply.trim()) return { ok: false, message: `Connected to ${this.model}, but it sent back an empty reply.`, latencyMs: Date.now() - t0 };
+      return { ok: true, message: `Connected to ${this.model}: "${(parseTagged(reply).text || reply.trim()).slice(0, 40)}"`, latencyMs: Date.now() - t0 };
     } catch (e) {
       return { ok: false, message: explainError(e, this.base) };
     }
   }
+
 }

@@ -45,6 +45,21 @@ export function SettingsPanel(p: Props) {
     if (tab === 'memory') void api.memoryList().then(setMemories);
   }, [tab]);
 
+  // Local servers are cheap to ask: fill the model list as soon as the Brain tab shows.
+  useEffect(() => {
+    if (tab !== 'brain' || (s.llm.provider !== 'ollama' && s.llm.provider !== 'lmstudio')) return;
+    let live = true;
+    void api.listModels(s.llm).then((r) => {
+      if (!live) return;
+      if (r.ok) setModels(r.models);
+      else setNote({ ok: false, text: r.error ?? 'Could not list models.' });
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, s.llm.provider, s.llm.baseUrl]);
+
   const save = async () => {
     setSaving(true);
     const saved = await api.saveSettings(s);
@@ -64,7 +79,7 @@ export function SettingsPanel(p: Props) {
   };
 
   const test = async () => {
-    setNote({ ok: true, text: 'Testing…' });
+    setNote({ ok: true, text: 'Testing… (first use can take up to a minute while the model loads)' });
     const r = await api.testBrain(s.llm);
     setNote({ ok: r.ok, text: `${r.message}${r.latencyMs ? ` (${r.latencyMs} ms)` : ''}` });
   };
@@ -215,12 +230,19 @@ export function SettingsPanel(p: Props) {
             <div className="row">
               <label className="grow">
                 Model
-                <input list="model-list" value={s.llm.model} onChange={(e) => set('llm', { model: e.target.value })} placeholder="Pick or type a model id" spellCheck={false} />
-                <datalist id="model-list">
-                  {models.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
+                {models.length > 0 ? (
+                  <select value={s.llm.model} onChange={(e) => set('llm', { model: e.target.value })}>
+                    {!s.llm.model && <option value="">Pick a model…</option>}
+                    {s.llm.model && !models.includes(s.llm.model) && <option value={s.llm.model}>{s.llm.model} (not on this server)</option>}
+                    {models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={s.llm.model} onChange={(e) => set('llm', { model: e.target.value })} placeholder="Click “List models”, or type a model id" spellCheck={false} />
+                )}
               </label>
               <button onClick={refreshModels}>↻ List models</button>
             </div>

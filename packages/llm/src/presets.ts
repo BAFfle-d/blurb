@@ -56,6 +56,8 @@ export function createProvider(cfg: LLMConfig, apiKey?: string, fetchImpl?: type
     apiKey,
     headers,
     vision: cfg.vision,
+    // Local servers run thinking models (Gemma 4, Qwen 3.x…) with reasoning on by default.
+    disableThinking: cfg.provider === 'ollama' || cfg.provider === 'lmstudio' || cfg.provider === 'llamacpp',
     fetchImpl,
   });
 }

@@ -38,6 +38,9 @@ export interface LLMProvider {
   test(): Promise<TestResult>;
 }
 
+/** How long "Test connection" waits before giving up. */
+export const TEST_TIMEOUT_MS = 60_000;
+
 export class LLMError extends Error {
   constructor(
     message: string,
@@ -61,6 +64,9 @@ export function explainError(e: unknown, baseUrl: string): string {
     if (e.status === 404) return 'Endpoint or model not found (404). Check the base URL and model name.';
     if (e.status === 429) return 'Rate limited by the provider (429). Blurb will try again later.';
     return e.message;
+  }
+  if (e instanceof Error && e.name === 'TimeoutError') {
+    return 'No answer in time. The model may still be loading into memory (big models can take a minute the first time), or it is too slow for this computer. Try again, or pick a smaller model.';
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (/ECONNREFUSED|fetch failed|ENOTFOUND|network/i.test(msg)) {

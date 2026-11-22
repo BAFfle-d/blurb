@@ -182,3 +182,87 @@ describe('GGUF scan', () => {
     expect(found.map((f) => f.name).sort()).toEqual(['big-00001-of-00002.gguf', 'tiny-model-Q4_K_M.gguf']);
   });
 });
+
+describe('thinking models (Gemma 4, Qwen 3.x on Ollama)', () => {
+  const ollama = (fetchImpl: typeof fetch) =>
+    createProvider({ ...DEFAULT_SETTINGS.llm, provider: 'ollama', model: 'gemma4:12b', baseUrl: 'http://localhost:11434/v1' }, undefined, fetchImpl)!;
+
+  it('asks local servers to skip thinking and ignores the separate reasoning field', async () => {
+    let body: any;
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body));
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: '', reasoning: 'Let me think about how a blob would answer…' } }] }),
+        JSON.stringify({ choices: [{ delta: { content: '[[emotion:happy]] Hi!' } }] }),
+        '[DONE]',
+      ]);
+    }) as unknown as typeof fetch;
+    expect(await ollama(fetchImpl).complete({ messages: [{ role: 'user', content: 'hi' }] })).toBe('[[emotion:happy]] Hi!');
+    expect(body.reasoning_effort).toBe('none');
+  });
+
+  it('strips inline <think> blocks, even when the tags are split across chunks', async () => {
+    const fetchImpl = (async () =>
+      sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: '<thi' } }] }),
+        JSON.stringify({ choices: [{ delta: { content: 'nk>secret plan</th' } }] }),
+        JSON.stringify({ choices: [{ delta: { content: 'ink>\n\nHello <b>friend</b>' } }] }),
+        '[DONE]',
+      ])) as unknown as typeof fetch;
+    expect(await ollama(fetchImpl).complete({ messages: [{ role: 'user', content: 'hi' }] })).toBe('Hello <b>friend</b>');
+  });
+
+  it('retries without the hint when a server rejects it', async () => {
+    const bodies: any[] = [];
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      const b = JSON.parse(String(init.body));
+      bodies.push(b);
+      if ('reasoning_effort' in b) return new Response('{"error":"unknown field reasoning_effort"}', { status: 400 });
+      return sseResponse([JSON.stringify({ choices: [{ delta: { content: 'ok' } }] }), '[DONE]']);
+    }) as unknown as typeof fetch;
+    expect(await ollama(fetchImpl).complete({ messages: [{ role: 'user', content: 'hi' }] })).toBe('ok');
+    expect(bodies).toHaveLength(2);
+    expect('reasoning_effort' in bodies[1]).toBe(false);
+  });
+
+  it('reports an error instead of a silent empty reply when the model only thinks', async () => {
+    const fetchImpl = (async () =>
+      sseResponse([JSON.stringify({ choices: [{ delta: { reasoning: 'hmm '.repeat(50) }, finish_reason: 'length' }] }), '[DONE]'])) as unknown as typeof fetch;
+    const r = await ollama(fetchImpl).test();
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/thinking/);
+  });
+
+  it('does not send the hint to cloud providers', async () => {
+    let body: any;
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body));
+      return sseResponse(['[DONE]']);
+    }) as unknown as typeof fetch;
+    await createProvider({ ...DEFAULT_SETTINGS.llm, provider: 'openai', model: 'm', baseUrl: '' }, 'k', fetchImpl)!.complete({ messages: [{ role: 'user', content: 'x' }] });
+    expect('reasoning_effort' in body).toBe(false);
+  });
+});
+
+describe('Test connection never hangs', () => {
+  it('gives up with an explanation when the server never answers', async () => {
+    // Like Ollama while a big model is still loading: no response at all.
+    const fetchImpl = ((_u: string, init: RequestInit) =>
+      new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(init.signal!.reason)))) as unknown as typeof fetch;
+    const { OpenAICompatibleProvider } = await import('../src/index.js');
+    const p = new OpenAICompatibleProvider({ id: 'ollama', baseUrl: 'http://localhost:11434/v1', model: 'gemma4:12b', fetchImpl, testTimeoutMs: 50 });
+    const t0 = Date.now();
+    const r = await p.test();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/No answer in time/);
+  });
+
+  it('reports an empty reply instead of claiming success', async () => {
+    const fetchImpl = (async () => sseResponse([JSON.stringify({ choices: [{ delta: { content: '' } }] }), '[DONE]'])) as unknown as typeof fetch;
+    const p = createProvider({ ...DEFAULT_SETTINGS.llm, provider: 'ollama', model: 'llama3.2', baseUrl: 'http://localhost:11434/v1' }, undefined, fetchImpl)!;
+    const r = await p.test();
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/empty reply/);
+  });
+});
