@@ -9,8 +9,70 @@ export interface OpenAICompatOptions {
   apiKey?: string;
   headers?: Record<string, string>;
   vision?: boolean;
+  /**
+   * Ask the server to skip "thinking" (reasoning_effort: "none"). Local servers
+   * like Ollama otherwise stream a thinking model's reasoning in a separate
+   * field and leave `content` empty until it is done — or forever, if the
+   * reasoning uses up the reply budget. A pet doesn't need chain-of-thought.
+   */
+  disableThinking?: boolean;
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * Removes <think>…</think> spans from a token stream, for servers that inline
+ * reasoning in `content`. Tags split across chunks are handled.
+ */
+export class ThinkStripper {
+  private buf = '';
+  private inThink = false;
+  sawThinking = false;
+
+  push(chunk: string): string {
+    this.buf += chunk;
+    let out = '';
+    for (;;) {
+      if (!this.inThink) {
+        const i = this.buf.indexOf('<think>');
+        if (i >= 0) {
+          out += this.buf.slice(0, i);
+          this.buf = this.buf.slice(i + 7);
+          this.inThink = true;
+          this.sawThinking = true;
+          continue;
+        }
+        // hold back a possible partial "<think>" at the end
+        let keep = 0;
+        for (let k = Math.min(6, this.buf.length); k > 0; k--) {
+          if ('<think>'.startsWith(this.buf.slice(-k))) {
+            keep = k;
+            break;
+          }
+        }
+        out += this.buf.slice(0, this.buf.length - keep);
+        this.buf = this.buf.slice(this.buf.length - keep);
+        return out;
+      }
+      const j = this.buf.indexOf('</think>');
+      if (j >= 0) {
+        this.buf = this.buf.slice(j + 8).replace(/^\s+/, '');
+        this.inThink = false;
+        continue;
+      }
+      this.buf = this.buf.slice(-7); // could be a partial "</think>"
+      return out;
+    }
+  }
+
+  end(): string {
+    const rest = this.inThink ? '' : this.buf;
+    this.buf = '';
+    return rest;
+  }
+}
+
+export const THINKING_ONLY_MESSAGE =
+  'The model spent its whole reply thinking and never answered. Raise "Max reply length" in Settings → Brain, or pick a model without a thinking mode.';
 
 type Part = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
@@ -47,34 +109,57 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async *stream(opts: GenerateOptions): AsyncIterable<string> {
-    const res = await this.f(`${this.base}/chat/completions`, {
-      method: 'POST',
-      headers: this.headers(),
-      signal: opts.signal,
-      body: JSON.stringify({
-        model: this.model,
-        messages: opts.messages.map((m) => toWire(m, !!this.o.vision)),
-        temperature: opts.temperature ?? 0.8,
-        max_tokens: opts.maxTokens ?? 256,
-        stream: true,
-      }),
-    });
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: opts.messages.map((m) => toWire(m, !!this.o.vision)),
+      temperature: opts.temperature ?? 0.8,
+      max_tokens: opts.maxTokens ?? 256,
+      stream: true,
+    };
+    if (this.o.disableThinking) body.reasoning_effort = 'none';
+    const post = () =>
+      this.f(`${this.base}/chat/completions`, { method: 'POST', headers: this.headers(), signal: opts.signal, body: JSON.stringify(body) });
+    let res = await post();
+    if (!res.ok && res.status === 400 && 'reasoning_effort' in body) {
+      // Server doesn't understand the hint (non-thinking model or older server): retry without it.
+      delete body.reasoning_effort;
+      res = await post();
+    }
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => '');
       throw new LLMError(`HTTP ${res.status}: ${text.slice(0, 200)}`, res.status);
     }
+    const strip = new ThinkStripper();
+    let answered = false;
+    let thought = false;
     for await (const ev of readSSE(res.body, opts.signal)) {
-      if (ev.data === '[DONE]') return;
-      let json: { choices?: Array<{ delta?: { content?: string }; finish_reason?: string }>; error?: { message?: string } };
+      if (ev.data === '[DONE]') break;
+      let json: {
+        choices?: Array<{ delta?: { content?: string; reasoning?: string; reasoning_content?: string; thinking?: string }; finish_reason?: string }>;
+        error?: { message?: string };
+      };
       try {
         json = JSON.parse(ev.data);
       } catch {
         continue;
       }
       if (json.error) throw new LLMError(json.error.message ?? 'provider error');
-      const delta = json.choices?.[0]?.delta?.content;
-      if (delta) yield delta;
+      const d = json.choices?.[0]?.delta;
+      if (d?.reasoning || d?.reasoning_content || d?.thinking) thought = true;
+      if (d?.content) {
+        const visible = strip.push(d.content);
+        if (visible) {
+          answered = true;
+          yield visible;
+        }
+      }
     }
+    const tail = strip.end();
+    if (tail) {
+      answered = true;
+      yield tail;
+    }
+    if (!answered && (thought || strip.sawThinking)) throw new LLMError(THINKING_ONLY_MESSAGE);
   }
 
   complete(opts: GenerateOptions) {
