@@ -17,6 +17,8 @@ import {
   RESOURCE_COLORS,
   WORLD,
   defaultWorldObjects,
+  newAreaObjects,
+  OUTDOOR_SPANS,
   makeId,
   paletteFromBody,
   validateProgram,
@@ -91,7 +93,7 @@ export function newPetState(name = 'Blurb'): PetState {
     id: 'blurb',
     name,
     mode: 'windowed',
-    position: { x: 170, y: WORLD.floorY },
+    position: { x: WORLD.houseX + 170, y: WORLD.floorY }, // main room
     velocity: { x: 0, y: 0 },
     facing: 'right',
     activity: 'idle',
@@ -164,6 +166,7 @@ export class PetSim {
     this.notes = snapshot?.notes ?? [];
     this.outbox = snapshot?.outbox ?? [];
     this.gifts = snapshot?.gifts ?? [];
+    if (this.world.width < WORLD.width) this.moveIntoBiggerWorld();
     // Never resume carrying something: put it down where Blurb is.
     this.dropCarried();
     // Never resume mid-book either (the open book isn't saved).
@@ -384,7 +387,8 @@ export class PetSim {
       // Common finds, plus the odd scrap of bioplastic, wire or glass.
       const kinds: ResourceKind[] = ['pebble', 'pebble', 'pebble', 'stick', 'stick', 'stick', 'fluff', 'fluff', 'fluff', 'leaf', 'leaf', 'bioplastic', 'wire', 'glass'];
       const r = kinds[Math.floor(this.rng() * kinds.length)];
-      this.addObject('resource', WORLD.doorX + 10 + this.rng() * (WORLD.width - WORLD.doorX - 24), 'world', {
+      const [a, b] = OUTDOOR_SPANS[Math.floor(this.rng() * OUTDOOR_SPANS.length)];
+      this.addObject('resource', a + 10 + this.rng() * (b - a - 24), 'world', {
         data: { resource: r },
         color: RESOURCE_COLORS[r],
       });
@@ -536,6 +540,16 @@ export class PetSim {
       case 'foraging':
         if (!this.capabilities.forage || (o.data?.regrowIn ?? 0) > 0) return this.setActivity('idle', 2);
         break;
+      case 'jumping':
+      case 'sliding':
+        if (!this.capabilities.jump) {
+          this.say("I'm not allowed on the playground right now.", { emotion: 'sad' });
+          return this.setActivity('idle', 2);
+        }
+        if (def.activity === 'jumping') p.position.y = WORLD.floorY - 10; // on the mat from the first frame
+        this.maybeSay(def.activity === 'jumping' ? 'bounce' : 'slide', {}, 'excited', true);
+        this.log(def.activity === 'jumping' ? 'started bouncing on the trampoline' : 'climbed up the slide');
+        break;
       case 'building':
         if (!this.capabilities.build_copies) return this.setActivity('idle', 2);
         break;
@@ -552,6 +566,13 @@ export class PetSim {
       return this.setActivity('idle', 1);
     }
     const def = OBJECT_DEFS[o.kind];
+    if (p.activity === 'jumping') {
+      p.position.x = o.x + def.width / 2;
+      p.position.y = WORLD.floorY - 10; // standing on the mat; the bounce itself is drawn
+      o.data = { ...o.data, bounce: 2 };
+    } else if (p.activity === 'sliding') {
+      this.slidePath(o, (def.duration ?? 12) - p.activityTimer);
+    }
     const effect = p.activity === 'watching' ? WATCH_EFFECT : def.effect;
     if (effect) {
       const k = dt * Math.max(1, this.simSpeed * 0.5);
@@ -942,6 +963,12 @@ export class PetSim {
         case 'skin':
           this.changeColor(t.arg ?? '');
           break;
+        case 'jump':
+          use(byKind(['trampoline']));
+          break;
+        case 'slide':
+          use(byKind(['slide']));
+          break;
         case 'code':
           use(byKind(['computer']));
           break;
@@ -1127,6 +1154,51 @@ export class PetSim {
     this.pet.appearance.shapeId = shapeId;
     this.emit({ type: 'burst', kind: 'magic', x: this.pet.position.x, y: this.pet.position.y - 20 });
     return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // the bigger world + playground
+  // -------------------------------------------------------------------------
+
+  /** Old two-room saves: shift everything into place and add the new areas. */
+  private moveIntoBiggerWorld() {
+    const shift = WORLD.legacyShift;
+    for (const o of this.world.objects) {
+      o.x += shift;
+      o.zone = zoneAt(o.x + (OBJECT_DEFS[o.kind]?.width ?? 0) / 2);
+    }
+    this.pet.position.x += shift;
+    if (this.pet.goal) this.pet.goal.x += shift;
+    this.world.width = WORLD.width;
+    this.world.doorX = WORLD.doorX;
+    const ids = new Set(this.world.objects.map((o) => o.id));
+    for (const o of newAreaObjects()) if (!ids.has(o.id)) this.world.objects.push(o);
+    this.log('the house grew: a storage room, a back yard, and a field with a playground!');
+  }
+
+  /** Slide loop (6 s): climb the ladder, cross the platform, whoosh down, walk back. */
+  private slidePath(o: WorldObject, elapsed: number) {
+    const p = this.pet;
+    const ph = (elapsed % 6) / 6;
+    const ladder = o.x + 5;
+    const top = WORLD.floorY - 28;
+    if (ph < 0.4) {
+      p.facing = 'right';
+      p.position.x = ladder;
+      p.position.y = WORLD.floorY - (ph / 0.4) * 28;
+    } else if (ph < 0.5) {
+      p.position.x = ladder + ((ph - 0.4) / 0.1) * 8;
+      p.position.y = top;
+    } else if (ph < 0.75) {
+      const k = (ph - 0.5) / 0.25;
+      p.position.x = o.x + 13 + k * 33;
+      p.position.y = top + k * 26;
+    } else {
+      const k = (ph - 0.75) / 0.25;
+      p.facing = 'left';
+      p.position.x = o.x + 46 - k * (46 - 5);
+      p.position.y = WORLD.floorY;
+    }
   }
 
   // -------------------------------------------------------------------------

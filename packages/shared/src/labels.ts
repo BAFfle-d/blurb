@@ -8,6 +8,8 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   eating: 'munching a snack',
   reading: 'reading',
   watching: 'watching a movie on the tablet',
+  jumping: 'bouncing on the trampoline',
+  sliding: 'zooming down the slide',
   coding: 'tinkering at the computer',
   playing: 'playing',
   building: 'building something at the workbench',

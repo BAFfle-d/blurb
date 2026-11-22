@@ -476,6 +476,8 @@ export class PetHost {
       [/nap|sleep|bed|rest/, () => (act('nap'), ['Okay… nap time. Zzz.', 'sleepy'])],
       [/eat|food|hungry|snack/, () => (act('eat'), ['Snack time!', 'excited'])],
       [/play|ball|toy|yarn/, () => (act('play'), ['Play! Play! Play!', 'excited'])],
+      [/trampoline|jump|bounce/, () => (act('jump'), ['To the trampoline! Boing!', 'excited'])],
+      [/slide/, () => (act('slide'), ['Slide time! Wheee!', 'excited'])],
       [/movie|film|watch|tablet/, () => (act('watch'), ['Movie night! Grabbing my tablet.', 'excited'])],
       [/read|book/, () => (act('read'), ['Ooh, story time.', 'happy'])],
       [/code|computer|tinker|program/, () => (act('code'), ['To the computer! Beep boop.', 'thinking'])],

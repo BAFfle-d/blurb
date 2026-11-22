@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WORLD, toPublicState } from '@blurb/shared';
+import { WORLD, toPublicState, zoneAt } from '@blurb/shared';
 import { DesktopSim, PetSim, type DesktopEnv } from '../src/index.js';
 
 /** Deterministic RNG so behavior tests are stable. */
@@ -344,5 +344,75 @@ describe('color changes from chat, and restarts mid-book', () => {
     }
     expect(saw).toBe('Octopus');
     expect(events).toEqual(['start:Octopus:tablet', 'finish:Octopus:tablet']);
+  });
+});
+
+describe('bigger world + playground', () => {
+  it('moves an old two-room save into the bigger world', () => {
+    const old = new PetSim().snapshot();
+    // fake a save from before: old width, original coordinates, no new areas
+    old.world.width = 480;
+    old.world.doorX = 300;
+    old.world.objects = old.world.objects.filter((o) => !['trampoline-1', 'slide-1', 'tree-2', 'flowers-2', 'flowers-3', 'bush-2', 'plant_pot-2', 'resource-3'].includes(o.id)).map((o) => ({ ...o, x: o.x - WORLD.legacyShift }));
+    old.pet.position.x = 170;
+    const bedX = old.world.objects.find((o) => o.id === 'bed-1')!.x;
+    const sim = new PetSim(old);
+    expect(sim.world.width).toBe(WORLD.width);
+    expect(sim.world.objects.find((o) => o.id === 'bed-1')!.x).toBe(bedX + WORLD.legacyShift);
+    expect(sim.pet.position.x).toBe(170 + WORLD.legacyShift);
+    expect(sim.world.objects.some((o) => o.kind === 'trampoline')).toBe(true);
+    expect(sim.world.objects.some((o) => o.kind === 'slide')).toBe(true);
+    // not moved twice
+    const again = new PetSim(sim.snapshot());
+    expect(again.world.objects.find((o) => o.id === 'bed-1')!.x).toBe(bedX + WORLD.legacyShift);
+  });
+
+  it('knows which areas are inside and outside', () => {
+    expect(zoneAt(50)).toBe('yard'); // back yard
+    expect(zoneAt(200)).toBe('house'); // storage room
+    expect(zoneAt(450)).toBe('house'); // main room
+    expect(zoneAt(700)).toBe('yard'); // front yard
+    expect(zoneAt(1000)).toBe('yard'); // field
+  });
+
+  it('bounces on the trampoline when bored, and only if jumping is allowed', () => {
+    const sim = makeSim();
+    sim.world.objects = sim.world.objects.filter((o) => o.kind === 'trampoline');
+    sim.pet.needs = { energy: 90, fullness: 90, curiosity: 0, boredom: 100, social: 0 };
+    let jumped = false;
+    for (let i = 0; i < 600 && !jumped; i++) {
+      sim.tick(0.1);
+      jumped = sim.pet.activity === 'jumping';
+    }
+    expect(jumped).toBe(true);
+    expect(sim.pet.position.y).toBe(WORLD.floorY - 10);
+
+    const off = makeSim();
+    off.capabilities.jump = false;
+    off.world.objects = off.world.objects.filter((o) => o.kind === 'trampoline');
+    off.requestUse(off.world.objects[0].id);
+    for (let i = 0; i < 600; i++) {
+      off.tick(0.1);
+      expect(off.pet.activity).not.toBe('jumping');
+    }
+  });
+
+  it('climbs the ladder and slides down', () => {
+    const sim = makeSim();
+    sim.world.objects = sim.world.objects.filter((o) => o.kind === 'slide');
+    const slide = sim.world.objects[0];
+    sim.requestUse(slide.id);
+    let maxHeight = 0;
+    let reachedEnd = false;
+    for (let i = 0; i < 900; i++) {
+      sim.tick(0.1);
+      if (sim.pet.activity === 'sliding') {
+        maxHeight = Math.max(maxHeight, WORLD.floorY - sim.pet.position.y);
+        if (sim.pet.position.x > slide.x + 40) reachedEnd = true;
+      }
+    }
+    expect(maxHeight).toBeGreaterThan(20);
+    expect(reachedEnd).toBe(true);
+    expect(sim.pet.position.y).toBe(WORLD.floorY);
   });
 });

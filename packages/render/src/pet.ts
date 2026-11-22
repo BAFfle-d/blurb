@@ -72,6 +72,25 @@ export function poseFor(look: PetLook, t: number, seed = 0): PoseResult {
       arm = p < 0.5 ? 'wave1' : 'wave2';
       break;
     }
+    case 'jumping': {
+      // Big trampoline bounces: squash on the mat, stretch in the air.
+      const h = Math.abs(Math.sin(t * Math.PI * 1.4));
+      lift = Math.round(h * 24); // about three-quarters of a body height: a bounce, not flight
+      if (h < 0.22) (dw = 4), (dh = -4);
+      else (dw = -2), (dh = 3);
+      face.eyes = 'excited';
+      face.mouth = 'open';
+      face.blush = true;
+      arm = h > 0.6 ? 'up' : 'wave1';
+      break;
+    }
+    case 'sliding':
+      face.eyes = 'excited';
+      face.mouth = 'open';
+      arm = 'up';
+      dw = 1;
+      dh = -1;
+      break;
     case 'sleeping':
     case 'desktop_nap':
     case 'napping':

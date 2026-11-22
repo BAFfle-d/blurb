@@ -49,6 +49,12 @@ export class WorldRenderer {
   private petBody = { x: 0, y: 0, w: 0, h: 0 };
   readonly seed = Math.random() * 10;
   scale = 2;
+  /** Left edge of the visible part of the world (world px). */
+  camX = 0;
+  private camMode: 'follow' | 'manual' = 'follow';
+  private camTarget = 0;
+  private manualUntil = 0;
+  private camReady = false;
   offX = 0;
   offY = 0;
   private dpr = 1;
@@ -79,19 +85,49 @@ export class WorldRenderer {
     this.dpr = dpr;
     this.canvas.width = Math.max(1, Math.round(cssW * dpr));
     this.canvas.height = Math.max(1, Math.round(cssH * dpr));
-    const s = Math.min(this.canvas.width / WORLD.width, this.canvas.height / WORLD.height);
+    const VW = WORLD.viewWidth;
+    const s = Math.min(this.canvas.width / VW, this.canvas.height / WORLD.height);
     const si = Math.floor(s);
     this.scale = si >= 2 && si / s > 0.82 ? si : s;
-    this.offX = Math.round((this.canvas.width - WORLD.width * this.scale) / 2);
+    this.offX = Math.round((this.canvas.width - VW * this.scale) / 2);
     this.offY = Math.round((this.canvas.height - WORLD.height * this.scale) / 2);
   }
 
   /** CSS-pixel point (relative to the canvas) → world coords. */
   toWorld(cssX: number, cssY: number) {
     return {
-      x: (cssX * this.dpr - this.offX) / this.scale,
+      x: (cssX * this.dpr - this.offX) / this.scale + this.camX,
       y: (cssY * this.dpr - this.offY) / this.scale,
     };
+  }
+
+  // ---- camera ----
+
+  private clampCam(x: number) {
+    return Math.max(0, Math.min(WORLD.width - WORLD.viewWidth, x));
+  }
+
+  /** Drag the view by CSS pixels (switches to manual for a while). */
+  panBy(dxCss: number) {
+    this.camMode = 'manual';
+    this.manualUntil = performance.now() + 20_000;
+    this.camX = this.camTarget = this.clampCam(this.camX - (dxCss * this.dpr) / this.scale);
+  }
+
+  /** Smoothly scroll to center a world x (e.g. a room button). */
+  lookAt(worldX: number) {
+    this.camMode = 'manual';
+    this.manualUntil = performance.now() + 20_000;
+    this.camTarget = this.clampCam(worldX - WORLD.viewWidth / 2);
+  }
+
+  /** Go back to following Blurb. */
+  follow() {
+    this.camMode = 'follow';
+  }
+
+  get following() {
+    return this.camMode === 'follow';
   }
 
   hitPet(wx: number, wy: number): boolean {
@@ -136,7 +172,18 @@ export class WorldRenderer {
     w.imageSmoothingEnabled = false;
     w.clearRect(0, 0, WORLD.width, WORLD.height);
     const hour = s?.timeOfDay ?? 12;
-    drawBackdrop(w, hour, t);
+    // camera: follow Blurb (or the doorway postcard while it's out), unless panned by hand
+    if (this.camMode === 'manual' && now > this.manualUntil) this.camMode = 'follow';
+    if (s && this.camMode === 'follow') {
+      const focus = s.pet.where === 'out' ? WORLD.doorX + 90 : this.petX || s.pet.x;
+      this.camTarget = this.clampCam(focus - WORLD.viewWidth / 2);
+    }
+    if (!this.camReady && s) {
+      this.camX = this.camTarget;
+      this.camReady = true;
+    }
+    this.camX += (this.camTarget - this.camX) * Math.min(1, dt * 5);
+    drawBackdrop(w, hour, t, this.camX);
 
     const night = nightFactor(hour);
     const info: ObjectDrawInfo = { t, night, hoverId: opts.hoverId };
@@ -235,10 +282,11 @@ export class WorldRenderer {
     c.imageSmoothingEnabled = false;
     c.fillStyle = '#0d0a12';
     c.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    c.drawImage(this.world as CanvasImageSource, this.offX, this.offY, WORLD.width * this.scale, WORLD.height * this.scale);
+    const cx = Math.round(this.camX);
+    c.drawImage(this.world as CanvasImageSource, cx, 0, WORLD.viewWidth, WORLD.height, this.offX, this.offY, WORLD.viewWidth * this.scale, WORLD.height * this.scale);
 
     if (s && bubbleAnchor) {
-      const ax = this.offX + bubbleAnchor.x * this.scale;
+      const ax = this.offX + (bubbleAnchor.x - cx) * this.scale;
       const ay = this.offY + bubbleAnchor.y * this.scale;
       if (s.pet.where === 'out') {
         drawLabel(c, `${s.pet.name} is out on the desktop — ${opts.outLabel ?? OUT_LABELS[s.pet.activity] ?? 'exploring'}`, ax, ay - 6 * this.dpr, this.dpr);
@@ -253,7 +301,7 @@ export class WorldRenderer {
 
   /** While Blurb is out on the owner's desktop, show an abstract postcard. */
   private drawPostcard(w: Ctx, look: PetLook, t: number) {
-    const x = 322;
+    const x = WORLD.doorX + 22;
     const y = 96;
     const pw = 136;
     const ph = 84;

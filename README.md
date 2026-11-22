@@ -80,6 +80,10 @@ Data flow:
 
 ## Things in Blurb's world
 
+**The world** runs left to right: back yard → storage room (shelves, back door) → main room → front yard → field with a playground. The view follows Blurb. Use the room buttons to look around, drag empty space or scroll to pan, and **📍 Follow Blurb** to snap back. Saves from the smaller world move over automatically.
+
+- **Playground:** a trampoline (Blurb bounces) and a slide (climbs the ladder, whooshes down). Jumping is its own ability: Settings → Abilities → *Jump on the trampoline and play on the slide*.
+
 - **Bookshelf, with real books.** It fills itself from [Open Library](https://openlibrary.org) on cozy topics (or your favorites, in Settings → Behavior). Blurb reads each book's real description and reacts. To restock, right-click the shelf → **New books**, optionally with a topic. Offline, it falls back to public-domain classics.
 - **Tablet.** Blurb carries it somewhere cozy, then reads Wikipedia (and remembers what it learned) or watches a movie. It's built from bioplastic, wire and glass.
 - **Pillow.** The plushie sits on it, and Blurb tucks it in after playing, always at bedtime. The plushie is Blurb's friend, so it can never be transformed into anything else.
