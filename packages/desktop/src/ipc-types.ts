@@ -4,6 +4,7 @@ import type { ProviderPreset } from '@blurb/llm';
 import type {
   AppSettings,
   Appearance,
+  BookRef,
   BlobPalette,
   ChatMessage,
   CommNote,
@@ -25,6 +26,9 @@ export interface WorldInfo {
   inventory: Inventory;
   appearance: Appearance;
   look: { palette: BlobPalette; shape: ShapeSpec };
+  /** Books on each shelf (desktop only; fans see just the current title). */
+  shelves: Array<{ id: string; books: BookRef[] }>;
+  reading?: { title: string; author?: string };
 }
 
 export interface InitData {
@@ -96,6 +100,7 @@ export interface BlurbApi {
   place(kind: PlaceKind, x: number): Promise<boolean>;
   dropToBox(item: Pick<DropBoxItem, 'kind' | 'resource' | 'objectKind' | 'count'>): Promise<void>;
   giveTreat(): Promise<void>;
+  restockShelf(shelfId: string, topic: string): Promise<{ ok: boolean; count: number; source: string; topic: string; error?: string }>;
 
   setSkin(id: string): Promise<boolean>;
   setShape(id: string): Promise<boolean>;
@@ -131,7 +136,7 @@ export interface BlurbApi {
 
 export const INVOKE_CHANNELS = [
   'init', 'chat', 'askScreen', 'petStart', 'petContinue', 'dragStart', 'dragMove', 'dragEnd',
-  'useObject', 'moveObject', 'recolorObject', 'removeObject', 'place', 'dropToBox', 'giveTreat',
+  'useObject', 'moveObject', 'recolorObject', 'removeObject', 'place', 'dropToBox', 'giveTreat', 'restockShelf',
   'setSkin', 'setShape', 'decideShape', 'markNotesRead', 'moderate', 'setFanMode',
   'saveSettings', 'setSecret', 'clearSecret', 'listModels', 'testBrain', 'scanGguf', 'hfSearch', 'hfFiles', 'hfDownload',
   'memoryList', 'memoryDelete', 'memoryClear', 'goOut',

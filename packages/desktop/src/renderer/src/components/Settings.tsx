@@ -318,6 +318,21 @@ export function SettingsPanel(p: Props) {
             <input type="range" min={0} max={600} step={15} value={s.behavior.thinkIntervalSec} onChange={(e) => set('behavior', { thinkIntervalSec: Number(e.target.value) })} />
           </label>
           <fieldset>
+            <legend>Books & learning</legend>
+            <label className="check">
+              <input type="checkbox" checked={s.behavior.realBooks.enabled} onChange={(e) => set('behavior', { realBooks: { ...s.behavior.realBooks, enabled: e.target.checked } })} /> Fill
+              the bookshelf with real books from Open Library (needs internet; only the topic is sent). Off = public-domain classics.
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={s.behavior.realBooks.wikipedia} onChange={(e) => set('behavior', { realBooks: { ...s.behavior.realBooks, wikipedia: e.target.checked } })} /> Read
+              Wikipedia on the tablet so Blurb learns real facts (and remembers them). Only the topic is sent.
+            </label>
+            <label>
+              Favorite topics <small>(comma-separated; blank = a cozy surprise each time)</small>
+              <input value={s.behavior.realBooks.topics} placeholder="space, dinosaurs, poetry" onChange={(e) => set('behavior', { realBooks: { ...s.behavior.realBooks, topics: e.target.value } })} />
+            </label>
+          </fieldset>
+          <fieldset>
             <legend>Screen peeks (off by default)</legend>
             <label className="check">
               <input type="checkbox" checked={s.behavior.screenPeek.enabled} onChange={(e) => set('behavior', { screenPeek: { ...s.behavior.screenPeek, enabled: e.target.checked } })} /> While

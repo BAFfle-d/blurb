@@ -34,6 +34,7 @@ export const ACTIVITIES = [
   'sleeping',
   'eating',
   'reading',
+  'watching',
   'coding',
   'playing',
   'building',
@@ -139,8 +140,27 @@ export interface PetState {
   goal?: PetGoal;
   speech?: SpeechBubble;
   inventory: Inventory;
+  /** The book Blurb is reading right now (real title from the shelf or tablet). */
+  book?: BookInfo;
   /** Desktop overlay state; null while in windowed mode. Never published. */
   desktop?: DesktopPetState;
+}
+
+export interface BookInfo {
+  title: string;
+  author?: string;
+}
+
+/** A real book on a shelf (from Open Library, or the built-in classics). */
+export interface BookRef {
+  /** Open Library work key, e.g. "/works/OL106091W", or "classic:<slug>". */
+  key: string;
+  title: string;
+  author?: string;
+  /** Short "what it's about": description or first sentence. */
+  blurb?: string;
+  subjects?: string[];
+  read?: boolean;
 }
 
 export interface PetGoal {
@@ -148,6 +168,8 @@ export interface PetGoal {
   objectId?: string;
   x: number;
   reason: string;
+  /** After arriving (carrying something), start this. */
+  then?: 'read_tablet' | 'watch_tablet';
 }
 
 /** Overlay-mode position lives in *global screen* coordinates. Local-only. */
@@ -182,11 +204,16 @@ export const OBJECT_KINDS = [
   'lamp',
   'rug',
   'plant_pot',
+  'tablet',
+  'pillow',
+  'blocks',
+  'top',
+  'duck',
   'resource',
 ] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
 
-export const RESOURCE_KINDS = ['stick', 'leaf', 'berry', 'pebble', 'fluff'] as const;
+export const RESOURCE_KINDS = ['stick', 'leaf', 'berry', 'pebble', 'fluff', 'bioplastic', 'wire', 'glass'] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
 export type Zone = 'house' | 'yard';
@@ -217,6 +244,12 @@ export interface WorldObjectData {
   bounce?: number;
   /** comm_box: unread notes from Blurb. */
   unread?: number;
+  /** Portable items: being carried by Blurb (drawn in its arms). */
+  carried?: boolean;
+  /** bookshelf: the books on it. */
+  books?: BookRef[];
+  /** bookshelf: changes when restocked, so the spines change color. */
+  shelfSeed?: number;
 }
 
 export interface WorldState {
@@ -445,6 +478,8 @@ export interface BehaviorSettings {
   thinkIntervalSec: number;
   /** Let Blurb take an unprompted peek at the screen and comment. Off by default. */
   screenPeek: { enabled: boolean; intervalMin: number; allowCloud: boolean };
+  /** Fill the bookshelf with real books from Open Library (needs internet). */
+  realBooks: { enabled: boolean; topics: string; wikipedia: boolean };
 }
 
 export interface AppSettings {

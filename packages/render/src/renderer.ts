@@ -7,7 +7,7 @@
  * display resolution afterwards so it stays crisp.
  */
 import { WORLD, type ObjectKind, type PublicObject, type PublicState } from '@blurb/shared';
-import { OBJECT_DRAWERS, objectBounds, objectZ, type ObjectDrawInfo } from './objects.js';
+import { OBJECT_DRAWERS, drawTablet, objectBounds, objectZ, type ObjectDrawInfo } from './objects.js';
 import { drawPet, makeCanvas, type PetLook } from './pet.js';
 import { Emitter, Particles } from './particles.js';
 import type { Ctx } from './pixel.js';
@@ -103,7 +103,7 @@ export class WorldRenderer {
     if (!this.state) return undefined;
     const sorted = [...this.state.objects].sort((a, b) => objectZ(b.k) - objectZ(a.k));
     return sorted.find((o) => {
-      if (o.k === 'rug') return false;
+      if (o.k === 'rug' || o.cr) return false;
       const r = objectBounds(o);
       return wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h;
     });
@@ -154,7 +154,17 @@ export class WorldRenderer {
       info.activeId = best?.id;
     }
 
-    for (const o of objects) OBJECT_DRAWERS[o.k](w, o, info);
+    // The plushie sits up on a pillow when it's on one.
+    const pillows = objects.filter((o) => o.k === 'pillow');
+    for (const o of objects) {
+      const lift = o.k === 'plushie' && pillows.some((p) => Math.abs(p.x + 8 - (o.x + 6)) <= 8) ? 3 : 0;
+      if (lift) {
+        w.save();
+        w.translate(0, -lift);
+      }
+      OBJECT_DRAWERS[o.k](w, o, info);
+      if (lift) w.restore();
+    }
 
     if (opts.hoverId) {
       const o = objects.find((x) => x.id === opts.hoverId);
@@ -196,6 +206,16 @@ export class WorldRenderer {
         this.petY += (ty - this.petY) * k;
         if (Math.abs(tx - this.petX) > 80) (this.petX = tx), (this.petY = ty);
         const drawn = drawPet(w, look, Math.round(this.petX), Math.round(this.petY), t, 1, this.seed);
+        // Anything Blurb is carrying is held in front of its body.
+        const held = objects.find((o) => o.cr && o.k === 'tablet');
+        if (held) {
+          const b = drawn.body;
+          // Held low at the side it's facing, so it never covers the face.
+          const hx = Math.round(p.facing === 'l' ? b.x - 3 : b.x + b.w - 7);
+          const hy = Math.round(b.y + b.h * 0.58);
+          const screen = p.activity === 'reading' ? 'page' : p.activity === 'watching' ? 'movie' : 'off';
+          drawTablet(w, hx, hy, held.c, screen, t);
+        }
         this.petBody = drawn.body;
         bubbleAnchor = { x: drawn.body.x + drawn.body.w / 2, y: drawn.body.y };
         this.emitter.tick(dt, p.activity, p.emotion, drawn.body.x + drawn.body.w / 2, drawn.body.y, drawn.body.y + drawn.body.h * 0.6);

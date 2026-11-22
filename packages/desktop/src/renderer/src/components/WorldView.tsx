@@ -7,19 +7,59 @@ import { useEffect, useRef, useState } from 'react';
 import { WorldRenderer } from '@blurb/render';
 import { OBJECT_DEFS, WORLD, type PublicObject, type PublicState } from '@blurb/shared';
 import { api } from '../api';
-import type { PlaceKind } from '../../../ipc-types';
+import type { PlaceKind, WorldInfo } from '../../../ipc-types';
 
 export const DRAG_MIME = 'application/x-blurb-item';
 
 interface Props {
   onBurstRef: (fn: (kind: 'treat' | 'build' | 'pet' | 'magic', x?: number, y?: number) => void) => void;
+  shelves: WorldInfo['shelves'];
+}
+
+/** Right-click a bookshelf: see what's on it and get new real books. */
+function ShelfMenu({ shelf }: { shelf?: WorldInfo['shelves'][number] }) {
+  const [topic, setTopic] = useState('');
+  const [status, setStatus] = useState('');
+  const books = shelf?.books ?? [];
+  const read = books.filter((b) => b.read).length;
+  if (!shelf) return null;
+  return (
+    <div className="shelf-menu">
+      <div className="muted">{books.length ? `${books.length} books · ${read} read` : 'No books yet'}</div>
+      {books.length > 0 && (
+        <ul className="shelf-list">
+          {books.map((b) => (
+            <li key={b.key} title={b.blurb ?? ''}>
+              {b.read ? '✓ ' : ''}
+              <em>{b.title}</em>
+              {b.author ? ` — ${b.author}` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+      <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Topic (blank = surprise me)" maxLength={60} aria-label="Book topic" />
+      <button
+        disabled={status === 'Fetching books…'}
+        onClick={async () => {
+          setStatus('Fetching books…');
+          const r = await api.restockShelf(shelf.id, topic);
+          setStatus(
+            !r.ok ? r.error ?? 'Could not get books.' : r.source === 'openlibrary' ? `${r.count} new books about ${r.topic}!` : `Offline — got ${r.count} classics instead.`,
+          );
+        }}
+      >
+        📚 New books
+      </button>
+      {status && <div className="muted">{status}</div>}
+    </div>
+  );
 }
 
 type Press =
   | { type: 'pet'; sx: number; sy: number; dragging: boolean; lastPat: number }
   | { type: 'obj'; obj: PublicObject; sx: number; dragging: boolean; offset: number };
 
-export function WorldView({ onBurstRef }: Props) {
+export function WorldView({ onBurstRef, shelves }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const r = useRef<WorldRenderer | null>(null);
   const press = useRef<Press | null>(null);
@@ -208,6 +248,7 @@ export function WorldView({ onBurstRef }: Props) {
               <input type="color" defaultValue={menu.obj.c} onChange={(e) => void api.recolorObject(menu.obj.id, e.target.value)} />
             </label>
           </div>
+          {menu.obj.k === 'bookshelf' && <ShelfMenu shelf={shelves.find((s) => s.id === menu.obj.id)} />}
           {!def.unique && (
             <button className="danger" onClick={() => (void api.removeObject(menu.obj.id), setMenu(null))}>Remove</button>
           )}

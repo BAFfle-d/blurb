@@ -37,6 +37,9 @@ describe('host ↔ relay ↔ fan, end to end', () => {
       dataDir: mkdtempSync(path.join(os.tmpdir(), 'blurb-host-')),
       getSecret: async (ref) => (ref === 'relay' ? TOKEN : undefined),
       createSocket: (url) => new WebSocket(url) as unknown as WSLike,
+      fetchImpl: (async () => {
+        throw new Error('offline in tests');
+      }) as unknown as typeof fetch,
     });
     host.sim.hourOverride = 13;
     host.start();

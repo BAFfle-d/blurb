@@ -43,6 +43,10 @@ export interface ObjectDef {
   recipe?: Partial<Record<ResourceKind, number>>;
   /** Infrastructure objects cannot be moved off-screen, deleted, or copied. */
   unique?: boolean;
+  /** Blurb can pick it up and use it anywhere (drawn in its arms). */
+  portable?: boolean;
+  /** Plushie: Blurb's friend. Programs may never transform it into something else. */
+  beloved?: boolean;
 }
 
 export const OBJECT_DEFS: Record<ObjectKind, ObjectDef> = {
@@ -79,7 +83,7 @@ export const OBJECT_DEFS: Record<ObjectKind, ObjectDef> = {
   plushie: {
     kind: 'plushie', label: 'Plushie', width: 12, height: 14, defaultColor: '#f39c34', zones: ['house', 'yard'],
     activity: 'playing', duration: 10, effect: { boredom: -3, social: -3 },
-    family: 'toy', recipe: { fluff: 3, leaf: 1 },
+    family: 'toy', recipe: { fluff: 3, leaf: 1 }, beloved: true,
   },
   drop_box: {
     kind: 'drop_box', label: 'Drop box', width: 22, height: 20, defaultColor: '#3f7fdc', zones: ['house'],
@@ -122,6 +126,30 @@ export const OBJECT_DEFS: Record<ObjectKind, ObjectDef> = {
     kind: 'plant_pot', label: 'Potted plant', width: 12, height: 20, defaultColor: '#d2734a', zones: ['house', 'yard'],
     recipe: { pebble: 2, leaf: 1 },
   },
+  tablet: {
+    kind: 'tablet', label: 'E-reader / movie tablet', width: 10, height: 7, defaultColor: '#3a3f4b', zones: ['house', 'yard'],
+    activity: 'reading', duration: 22, effect: { boredom: -4, curiosity: -3.5, energy: -0.2 },
+    recipe: { bioplastic: 2, wire: 2, glass: 1 }, portable: true,
+  },
+  pillow: {
+    kind: 'pillow', label: 'Pillow', width: 16, height: 5, defaultColor: '#c3a6f0', zones: ['house', 'yard'],
+    recipe: { fluff: 3 },
+  },
+  blocks: {
+    kind: 'blocks', label: 'Toy blocks', width: 11, height: 10, defaultColor: '#e8303a', zones: ['house', 'yard'],
+    activity: 'playing', duration: 9, effect: { boredom: -5, curiosity: -1, energy: -0.4 },
+    family: 'toy', recipe: { stick: 2 },
+  },
+  top: {
+    kind: 'top', label: 'Spinning top', width: 8, height: 9, defaultColor: '#26a69a', zones: ['house', 'yard'],
+    activity: 'playing', duration: 7, effect: { boredom: -5, energy: -0.3 },
+    family: 'toy', recipe: { stick: 1, pebble: 1 },
+  },
+  duck: {
+    kind: 'duck', label: 'Rubber duck', width: 9, height: 8, defaultColor: '#f5d442', zones: ['house', 'yard'],
+    activity: 'playing', duration: 8, effect: { boredom: -4, social: -1 },
+    family: 'toy', recipe: { bioplastic: 1 },
+  },
   resource: {
     kind: 'resource', label: 'Resource', width: 6, height: 5, defaultColor: '#a0703c', zones: ['house', 'yard'],
   },
@@ -133,6 +161,9 @@ export const RESOURCE_COLORS: Record<ResourceKind, string> = {
   berry: '#c2185b',
   pebble: '#9a9a9a',
   fluff: '#f4f4f4',
+  bioplastic: '#a8d8a0',
+  wire: '#d9822b',
+  glass: '#bfe6f5',
 };
 
 /** What foraging yields. [resource, min, max] */
@@ -197,7 +228,9 @@ export function defaultWorldObjects(): WorldObject[] {
     obj('bush-1', 'bush', 440),
     obj('flowers-1', 'flowers', 424),
     obj('yarn-1', 'yarn', 274),
-    obj('plushie-1', 'plushie', 120),
+    obj('pillow-1', 'pillow', 116),
+    obj('plushie-1', 'plushie', 118),
+    obj('tablet-1', 'tablet', 104),
     obj('resource-1', 'resource', 365, { data: { resource: 'pebble' }, color: RESOURCE_COLORS.pebble }),
     obj('resource-2', 'resource', 470, { data: { resource: 'stick' }, color: RESOURCE_COLORS.stick }),
   ];
@@ -259,5 +292,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     simSpeed: 1,
     thinkIntervalSec: 90,
     screenPeek: { enabled: false, intervalMin: 15, allowCloud: false },
+    realBooks: { enabled: true, topics: '', wikipedia: true },
   },
 };

@@ -9,7 +9,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-export type MemoryKind = 'owner_fact' | 'conversation' | 'fan' | 'event';
+export type MemoryKind = 'owner_fact' | 'conversation' | 'fan' | 'event' | 'learned';
 
 export interface MemoryEntry {
   id: string;
