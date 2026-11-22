@@ -57,7 +57,8 @@ button { cursor: pointer; }
 .palette-item:hover { background: #3b2c54; }
 .treat-emoji { font-size: 1.4rem; }
 
-.chat-drawer { position: relative; grid-column: 2; grid-row: 2; min-height: 0; width: 0; border-left: 1px solid var(--line); background: var(--bg-2); transition: width 0.2s; }
+/* Chat takes the top half of the window (never less than 340px, never more than the space available). */
+.chat-drawer { position: relative; grid-column: 2; grid-row: 2; align-self: start; height: max(340px, 50%); max-height: 100%; min-height: 0; width: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); border-bottom-left-radius: 14px; background: var(--bg-2); transition: width 0.2s; }
 .chat-drawer.open { width: 340px; }
 .drawer-tab { position: absolute; left: -38px; top: 12px; width: 34px; height: 34px; border-radius: 10px 0 0 10px; border: 1px solid var(--line); border-right: none; background: var(--card); z-index: 2; }
 .drawer-body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
