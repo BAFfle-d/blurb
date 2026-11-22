@@ -15,12 +15,15 @@ import {
   LIMITS,
   NAMED_COLORS,
   OBJECT_DEFS,
+  OBJECT_KINDS,
   TagStreamParser,
+  defOf,
   extractProgramJson,
   makeId,
   normalizeText,
   parseTagged,
   screenFanChat,
+  toPublicBlueprint,
   toPublicState,
   type AppSettings,
   type ChatMessage,
@@ -37,6 +40,7 @@ import {
   MemoryStore,
   bookReactionMessages,
   createProvider,
+  designMessages,
   explainError,
   fanReplyMessages,
   isLocalConfig,
@@ -127,9 +131,11 @@ export class PetHost {
     this.queue = new ChatQueue<ChatJob>((item, signal) => this.runChat(item.payload, signal));
     this.books = new BookSource({ fetchImpl: adapters.fetchImpl });
     this.wiki = new WikiSource({ fetchImpl: adapters.fetchImpl });
-    // Reading on the tablet = a Wikipedia article on one of the owner's topics.
-    this.sim.articleProvider = async () => {
+    // Reading on the tablet = a Wikipedia article on one of the owner's topics,
+    // or, when Blurb is researching an invention, on that exact topic.
+    this.sim.articleProvider = async (topic) => {
       const cfg = this.settings.behavior.realBooks;
+      if (topic) return this.research(topic);
       if (!cfg.wikipedia) return null;
       return this.wiki.article(this.books.pickTopic(cfg.topics));
     };
@@ -140,9 +146,28 @@ export class PetHost {
     });
     this.sim.programProvider = async (pctx) => {
       if (!this.provider) return null;
-      const text = await this.provider.complete({ messages: programMessages(this.promptContext(), pctx), maxTokens: 300, temperature: 0.9 });
+      const messages = pctx.design ? designMessages(this.promptContext(), pctx) : programMessages(this.promptContext(), pctx);
+      const text = await this.provider.complete({ messages, maxTokens: pctx.design ? 500 : 300, temperature: pctx.design ? 0.7 : 0.9 });
       return extractProgramJson(text);
     };
+  }
+
+  /**
+   * Learn about an invention topic: a Wikipedia article on exactly that topic,
+   * else a real Open Library book about it. Never a random fallback, so what
+   * Blurb designs is grounded in something it actually read.
+   */
+  private async research(topic: string): Promise<BookRef | null> {
+    const cfg = this.settings.behavior.realBooks;
+    if (cfg.wikipedia) {
+      const a = await this.wiki.article(topic, { strict: true });
+      if (a) return a;
+    }
+    if (cfg.enabled) {
+      const fill = await this.books.fillShelf(topic, 1);
+      if (fill.source === 'openlibrary' && fill.books[0]) return this.books.describe(fill.books[0]);
+    }
+    return null;
   }
 
   static async load(settings: AppSettings, adapters: HostAdapters): Promise<PetHost> {
@@ -275,7 +300,8 @@ export class PetHost {
 
   /** What fans see. Strict whitelist projection. */
   publicState(): PublicState {
-    return toPublicState(this.sim.pet, this.sim.world, this.sim.look(), this.settings.fans.mode, Date.now());
+    const built = this.sim.blueprints.filter((b) => b.status === 'approved').map(toPublicBlueprint);
+    return toPublicState(this.sim.pet, this.sim.world, this.sim.look(), this.settings.fans.mode, Date.now(), built);
   }
 
   /** What the owner's own window renders: public view + private speech. */
@@ -344,7 +370,9 @@ export class PetHost {
       recentEvents: this.sim.recentEvents(),
       memories: includeMemories ? this.memory.recall(query || this.sim.recentEvents().join(' '), 5).map((m) => m.text) : [],
       capabilities: this.sim.capabilities,
-      pendingApprovals: this.sim.notes.filter((n) => n.request?.status === 'pending'),
+      pendingApprovals: this.sim.notes.filter((n) => n.request?.status === 'pending' || n.invention?.status === 'pending'),
+      ideas: this.sim.ideas,
+      blueprints: this.sim.blueprints,
     };
   }
 
@@ -470,6 +498,20 @@ export class PetHost {
         ? this.ruleReply(job, `Ta-da! I'm ${named} now!`, 'excited', visibility)
         : this.ruleReply(job, 'Hmm, changing my color is switched off in my abilities.', 'confused', visibility);
     }
+    // "invent/make/build/design a <thing>" for something new = an idea to research.
+    const END = String.raw`(?:\s+(?:for|please|in|to|so)\b|[.!?,]|$)`;
+    const inv =
+      new RegExp(String.raw`\b(?:invent|design)\s+(?:me\s+|us\s+)?(?:(?:a|an|some|the)\s+)?([a-z][a-z ]{2,23}?)${END}`).exec(t) ??
+      new RegExp(String.raw`\b(?:make|build|create|craft)\s+(?:me\s+|us\s+)?(?:a|an|some)\s+([a-z][a-z ]{2,23}?)${END}`).exec(t);
+    const thing = inv?.[1].trim();
+    const STOP = /^(thing|something|stuff|copy|copies|new thing|toy|house|world)\b/;
+    const existing = thing && OBJECT_KINDS.some((k) => k === thing.replace(/ /g, '_') || OBJECT_DEFS[k].label.toLowerCase() === thing);
+    if (thing && !STOP.test(thing) && !existing) {
+      if (!this.sim.capabilities.invent) return this.ruleReply(job, 'Inventing is switched off in my abilities.', 'confused', visibility);
+      return this.sim.addIdea(thing, 'owner')
+        ? this.ruleReply(job, `Ooh, a ${thing}! I'll read about it on my tablet first, then design one for you to approve.`, 'excited', visibility)
+        : this.ruleReply(job, `I'm already working on that one (or I have too many ideas going). Check my comm box!`, 'thinking', visibility);
+    }
     const intents: Array<[RegExp, () => [string, Emotion]]> = [
       [/\b(hi|hello|hey|yo|morning|evening)\b/, () => (this.sim.gesture('wave'), ['Hi hi! I missed you!', 'happy'])],
       [/how are you|how're you|how do you feel|feeling/, () => [this.describeMood(), this.sim.pet.emotion]],
@@ -483,6 +525,7 @@ export class PetHost {
       [/code|computer|tinker|program/, () => (act('code'), ['To the computer! Beep boop.', 'thinking'])],
       [/forage|tree|bush|gather/, () => (act('forage'), ['Off to forage!', 'happy'])],
       [/build|make|craft/, () => (act('build'), ['To the workbench!', 'excited'])],
+      [/\binvent/, () => ['What should I invent? Tell me, like "invent a storage box".', 'thinking']],
       [/dance|party/, () => (act('dance'), ['💃 Wiggle wiggle!', 'excited'])],
       [/love you|good (blob|boy|girl|pet)|cute/, () => (this.sim.gesture('dance', 2), ['Aww! I love you too!', 'love'])],
       [/drop ?box|mail|delivery/, () => (act('check_dropbox'), ['Checking the drop box!', 'excited'])],
@@ -737,6 +780,6 @@ export class PetHost {
   describeObject(id: string): string {
     const o = this.sim.world.objects.find((x) => x.id === id);
     if (!o) return '';
-    return `${OBJECT_DEFS[o.kind].label} (${o.color})`;
+    return `${defOf(o).label} (${o.color})`;
   }
 }

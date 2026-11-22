@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { WorldRenderer } from '@blurb/render';
-import { AREAS, OBJECT_DEFS, WORLD, areaAt, type PublicObject, type PublicState } from '@blurb/shared';
+import { AREAS, OBJECT_DEFS, WORLD, areaAt, defOf, type PublicObject, type PublicState } from '@blurb/shared';
 import { api } from '../api';
 import type { PlaceKind, WorldInfo } from '../../../ipc-types';
 
@@ -126,7 +126,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
       return;
     }
     const obj = renderer.hitObject(w.x, w.y);
-    if (obj) press.current = { type: 'obj', obj, sx: w.x, dragging: false, offset: w.x - (obj.x + OBJECT_DEFS[obj.k].width / 2) };
+    if (obj) press.current = { type: 'obj', obj, sx: w.x, dragging: false, offset: w.x - (obj.x + defOf(obj).width / 2) };
     else press.current = { type: 'pan', lastX: e.clientX }; // drag empty space to look around
   };
 
@@ -168,7 +168,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
     } else {
       if (!p.dragging && Math.abs(w.x - p.sx) > 4) p.dragging = true;
       if (p.dragging) {
-        objMove.current = { id: p.obj.id, x: Math.round(w.x - p.offset - OBJECT_DEFS[p.obj.k].width / 2) };
+        objMove.current = { id: p.obj.id, x: Math.round(w.x - p.offset - defOf(p.obj).width / 2) };
         setCursor('grabbing');
       }
     }
@@ -236,7 +236,7 @@ export function WorldView({ onBurstRef, shelves }: Props) {
   };
 
   const swatches = ['#e8303a', '#f48fb1', '#f39c34', '#f5d442', '#4caf50', '#26a69a', '#80d0f8', '#3f7fdc', '#9b59d0', '#8d5a3b', '#f4f4f4', '#2a2a2e'];
-  const def = menu ? OBJECT_DEFS[menu.obj.k] : undefined;
+  const def = menu ? defOf(menu.obj) : undefined;
 
   return (
     <div className="world-wrap" onDragLeave={() => (ghost.current = null)}>

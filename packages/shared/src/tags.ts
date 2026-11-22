@@ -23,6 +23,7 @@ export const PET_ACTIONS = [
   'code',
   'forage',
   'build',
+  'invent',
   'check_dropbox',
   'wander',
   'wave',
@@ -36,7 +37,8 @@ export type ParsedTag =
   | { type: 'action'; action: PetActionName; arg?: string };
 
 const MAX_TAG_LEN = 64;
-const TAG_RE = /^\[\[?\s*(emotion|mood|action|feel)?\s*:?\s*([a-z_]+)(?:\s*:\s*([a-z0-9_\-]+))?\s*\]\]?$/i;
+// Args may contain spaces ("invent:storage box"), since models write them that way.
+const TAG_RE = /^\[\[?\s*(emotion|mood|action|feel)?\s*:?\s*([a-z_]+)(?:\s*:\s*([a-z0-9_\-][a-z0-9_\- ]*?))?\s*\]\]?$/i;
 
 export function parseTag(raw: string): ParsedTag | null {
   const m = TAG_RE.exec(raw);

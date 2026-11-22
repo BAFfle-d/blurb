@@ -64,8 +64,12 @@ export class WikiSource {
     }
   }
 
-  /** An article about the topic. Never throws; null if Wikipedia is unreachable. */
-  async article(topic: string): Promise<BookRef | null> {
+  /**
+   * An article about the topic. Never throws; null if Wikipedia is unreachable.
+   * `strict` (researching an invention): only articles about the topic itself,
+   * never the "something fascinating" fallback.
+   */
+  async article(topic: string, opts: { strict?: boolean } = {}): Promise<BookRef | null> {
     const t = topic.trim().slice(0, 60) || 'animals';
     // 1. search, in relevance order (the main article first), skipping anything read recently
     try {
@@ -83,6 +87,7 @@ export class WikiSource {
     // 2. the topic's own article
     const direct = await this.summary(cap(t));
     if (direct && !this.recent.includes(direct.title)) return this.remember(direct);
+    if (opts.strict) return direct ? this.remember(direct) : null;
     // 3. something fascinating
     const pool = FASCINATING.filter((x) => !this.recent.includes(x));
     const fallback = await this.summary(this.pick(pool.length ? pool : FASCINATING)!);

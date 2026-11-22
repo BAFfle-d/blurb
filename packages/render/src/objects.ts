@@ -2,7 +2,8 @@
  * Pixel-art drawings for every world object. Each is parameterized by the
  * object's color, so recolors (owner or Blurb) just work.
  */
-import { OBJECT_DEFS, RESOURCE_COLORS, WORLD, type ObjectKind, type PublicObject, type ResourceKind } from '@blurb/shared';
+import { RESOURCE_COLORS, WORLD, defOf, getBlueprint, type ObjectKind, type PublicObject, type ResourceKind } from '@blurb/shared';
+import { drawBlueprint } from './blueprint.js';
 import { type Ctx, dark, disc, dot, ellipse, hash01, ink, light, mix, outlinedRect, rect, strHash } from './pixel.js';
 
 export interface ObjectDrawInfo {
@@ -513,6 +514,11 @@ export const OBJECT_DRAWERS: Record<ObjectKind, Drawer> = {
   lamp,
   rug,
   plant_pot: plantPot,
+  invention: (ctx, o) => {
+    const bp = getBlueprint(o.bp);
+    if (bp) drawBlueprint(ctx, bp, o.x, FLOOR, o.c);
+    else outlinedRect(ctx, o.x, FLOOR - 16, 20, 16, o.c, ink(o.c)); // design not known yet
+  },
   trampoline,
   slide,
   tablet,
@@ -531,8 +537,8 @@ export function objectZ(k: ObjectKind): number {
   return 2;
 }
 
-export function objectBounds(o: { k: ObjectKind; x: number }): { x: number; y: number; w: number; h: number } {
-  const d = OBJECT_DEFS[o.k];
+export function objectBounds(o: { k: ObjectKind; x: number; bp?: string }): { x: number; y: number; w: number; h: number } {
+  const d = defOf(o);
   const h = o.k === 'rug' ? 8 : d.height;
   return { x: o.x, y: FLOOR - h, w: d.width, h };
 }

@@ -5,3 +5,4 @@ export * from './scene.js';
 export * from './particles.js';
 export * from './renderer.js';
 export * from './pixel.js';
+export * from './blueprint.js';

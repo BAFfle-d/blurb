@@ -6,7 +6,7 @@
  * scaled up nearest-neighbor. Text (speech bubbles, labels) is drawn at
  * display resolution afterwards so it stays crisp.
  */
-import { WORLD, type ObjectKind, type PublicObject, type PublicState } from '@blurb/shared';
+import { WORLD, setBlueprints, type ObjectKind, type PublicObject, type PublicState } from '@blurb/shared';
 import { OBJECT_DRAWERS, drawTablet, objectBounds, objectZ, type ObjectDrawInfo } from './objects.js';
 import { drawPet, makeCanvas, type PetLook } from './pet.js';
 import { Emitter, Particles } from './particles.js';
@@ -65,7 +65,10 @@ export class WorldRenderer {
     this.ctx = c;
   }
 
+  private bpKey = '';
   setState(s: PublicState) {
+    const key = (s.blueprints ?? []).map((b) => b.id).join();
+    if (s.blueprints && key !== this.bpKey) (this.bpKey = key), setBlueprints(s.blueprints);
     const first = !this.state;
     if (this.state && s.pet.emotion !== this.state.pet.emotion) this.onEmotionChange(s.pet.emotion);
     this.state = s;

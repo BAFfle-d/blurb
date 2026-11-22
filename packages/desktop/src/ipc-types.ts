@@ -4,6 +4,7 @@ import type { ProviderPreset } from '@blurb/llm';
 import type {
   AppSettings,
   Appearance,
+  Blueprint,
   BookRef,
   BlobPalette,
   ChatMessage,
@@ -11,6 +12,7 @@ import type {
   DropBox,
   DropBoxItem,
   FanMode,
+  Idea,
   Inventory,
   ObjectKind,
   ProviderId,
@@ -29,6 +31,14 @@ export interface WorldInfo {
   /** Books on each shelf (desktop only; fans see just the current title). */
   shelves: Array<{ id: string; books: BookRef[] }>;
   reading?: { title: string; author?: string };
+  /** Inventions: designs (pending/approved/declined), ideas, and what Blurb has read. */
+  blueprints: Blueprint[];
+  ideas: Idea[];
+  knowledge: string[];
+  /** Blueprint ids that are built somewhere in the world. */
+  built: string[];
+  /** How many of each resource Blurb can carry (storage inventions raise it). */
+  resourceCap: number;
 }
 
 export interface InitData {
@@ -105,6 +115,7 @@ export interface BlurbApi {
   setSkin(id: string): Promise<boolean>;
   setShape(id: string): Promise<boolean>;
   decideShape(noteId: string, approve: boolean): Promise<boolean>;
+  decideInvention(noteId: string, approve: boolean): Promise<boolean>;
   markNotesRead(): Promise<void>;
 
   moderate(eventId: string, approve: boolean): Promise<boolean>;
@@ -137,7 +148,7 @@ export interface BlurbApi {
 export const INVOKE_CHANNELS = [
   'init', 'chat', 'askScreen', 'petStart', 'petContinue', 'dragStart', 'dragMove', 'dragEnd',
   'useObject', 'moveObject', 'recolorObject', 'removeObject', 'place', 'dropToBox', 'giveTreat', 'restockShelf',
-  'setSkin', 'setShape', 'decideShape', 'markNotesRead', 'moderate', 'setFanMode',
+  'setSkin', 'setShape', 'decideShape', 'decideInvention', 'markNotesRead', 'moderate', 'setFanMode',
   'saveSettings', 'setSecret', 'clearSecret', 'listModels', 'testBrain', 'scanGguf', 'hfSearch', 'hfFiles', 'hfDownload',
   'memoryList', 'memoryDelete', 'memoryClear', 'goOut',
   'overlayPet', 'overlayDragStart', 'overlayDragEnd', 'overlayNap', 'goHome',

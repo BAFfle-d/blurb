@@ -13,9 +13,16 @@ import {
   DEFAULT_NEEDS,
   FORAGE_REGROW_SEC,
   FORAGE_YIELDS,
+  BEHAVIOR_DEFS,
+  LIMITS_INVENT,
   OBJECT_DEFS,
   RESOURCE_COLORS,
   WORLD,
+  canAfford,
+  defOf,
+  recipeText,
+  findProfanity,
+  setBlueprints,
   defaultWorldObjects,
   newAreaObjects,
   OUTDOOR_SPANS,
@@ -25,6 +32,7 @@ import {
   zoneAt,
   normalizeColor,
   type BlobPalette,
+  type Blueprint,
   type BookRef,
   type CapabilitySet,
   type CommNote,
@@ -32,6 +40,7 @@ import {
   type DropBoxItem,
   type Emotion,
   type Gesture,
+  type Idea,
   type Needs,
   type ObjectKind,
   type ParsedTag,
@@ -47,7 +56,7 @@ import {
   type WorldObject,
   type WorldState,
 } from '@blurb/shared';
-import { interactionX, moodFromNeeds, phrase, ruleProgram, scoreChoices } from './brain.js';
+import { interactionX, moodFromNeeds, phrase, ruleDesign, ruleProgram, scoreChoices, selfIdea } from './brain.js';
 
 export type SimEvent =
   | { type: 'speech'; speech: SpeechBubble }
@@ -72,9 +81,17 @@ export interface SimSnapshot {
   outbox: CommNote[];
   /** One-time gifts already delivered (new items arriving with an update). */
   gifts?: string[];
+  /** Titles of books and articles Blurb has finished: what it "knows". */
+  knowledge?: string[];
+  /** Things Blurb wants to invent. */
+  ideas?: Idea[];
+  /** Invention designs: pending, approved or declined. */
+  blueprints?: Blueprint[];
 }
 
 export type ProgramProvider = (ctx: ProgramContext) => Promise<unknown[] | null>;
+/** Fetches an article for the tablet; `topic` is set when Blurb is researching an idea. */
+export type ArticleProvider = (topic?: string) => Promise<BookRef | null>;
 
 const WALK_SPEED = 34;
 const GRAVITY = 520;
@@ -85,8 +102,15 @@ const MAX_SHELF_BOOKS = 12;
 const WATCH_EFFECT: Partial<Needs> = { boredom: -6, curiosity: -1, energy: -0.2 };
 /** Gift delivered once, so existing pets get the new things from this update. */
 const TABLET_GIFT = 'tablet-books-plushie-v1';
+const MAX_KNOWLEDGE = 40;
+/** How much of one resource Blurb can carry; each storage invention adds more. */
+const BASE_RESOURCE_CAP = 40;
+const STORAGE_BONUS = 20;
+/** After a failed lookup (offline), wait before trying to research again. */
+const RESEARCH_RETRY_SEC = 300;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
 
 export function newPetState(name = 'Blurb'): PetState {
   return {
@@ -141,7 +165,7 @@ export class PetSim {
   /** Optional: when set, computer sessions ask the LLM for a program. */
   programProvider?: ProgramProvider;
   /** Optional: when set, reading on the tablet fetches an article (Wikipedia). */
-  articleProvider?: () => Promise<BookRef | null>;
+  articleProvider?: ArticleProvider;
   /** Fixed hour for tests/demo; otherwise the local clock. */
   hourOverride?: number;
   rng: () => number = Math.random;
@@ -156,8 +180,14 @@ export class PetSim {
   private dragLast = { x: 0, y: 0, t: 0 };
   /** Set by a [[action:watch]] tag, read when Blurb picks up the tablet. */
   private tabletMode?: 'read' | 'watch';
-  private currentBook?: { book: BookRef; via: 'shelf' | 'tablet' };
+  private currentBook?: { book: BookRef; via: 'shelf' | 'tablet'; idea?: string };
   gifts: string[] = [];
+  knowledge: string[] = [];
+  ideas: Idea[] = [];
+  blueprints: Blueprint[] = [];
+  /** The researched idea this computer session is designing. */
+  private designing?: Idea;
+  private researchRetryAt = 0;
 
   constructor(snapshot?: SimSnapshot) {
     this.pet = snapshot?.pet ?? newPetState();
@@ -166,6 +196,10 @@ export class PetSim {
     this.notes = snapshot?.notes ?? [];
     this.outbox = snapshot?.outbox ?? [];
     this.gifts = snapshot?.gifts ?? [];
+    this.knowledge = snapshot?.knowledge ?? [];
+    this.ideas = snapshot?.ideas ?? [];
+    this.blueprints = snapshot?.blueprints ?? [];
+    this.syncBlueprints();
     if (this.world.width < WORLD.width) this.moveIntoBiggerWorld();
     // Never resume carrying something: put it down where Blurb is.
     this.dropCarried();
@@ -222,6 +256,9 @@ export class PetSim {
       notes: this.notes,
       outbox: this.outbox,
       gifts: this.gifts,
+      knowledge: this.knowledge,
+      ideas: this.ideas,
+      blueprints: this.blueprints,
     });
   }
 
@@ -431,6 +468,10 @@ export class PetSim {
       hour: this.world.timeOfDay,
       sinceCoding: this.sinceCoding,
       rng: this.rng,
+      wantsResearch: !!this.researchIdea(),
+      wantsDesign: !!this.designIdea(),
+      buildable: !!this.buildableBlueprint(),
+      gathering: this.missingFor(this.wantedBlueprint()),
     });
     const c = choices[0];
     if (!c) return this.setActivity('idle', 3);
@@ -491,7 +532,7 @@ export class PetSim {
   }
 
   private startUsing(o: WorldObject) {
-    const def = OBJECT_DEFS[o.kind];
+    const def = defOf(o);
     if (!def.activity) return this.setActivity('idle', 2);
     const p = this.pet;
     p.facing = o.x + def.width / 2 < p.position.x ? 'left' : 'right';
@@ -508,7 +549,7 @@ export class PetSim {
         break;
       }
       case 'sleeping':
-        p.position.y = WORLD.floorY - 9; // on the mattress
+        p.position.y = o.kind === 'invention' ? WORLD.floorY - Math.min(def.height - 2, 24) : WORLD.floorY - 9; // on the mattress
         this.maybeSay('sleep', {}, 'sleepy');
         this.log('went to bed');
         break;
@@ -520,8 +561,14 @@ export class PetSim {
         this.sinceCoding = 0;
         this.programResult = undefined;
         this.pendingProgram = null;
-        this.maybeSay('code', {}, 'thinking', true);
-        this.log('sat down at the computer');
+        this.designing = this.designIdea();
+        if (this.designing) {
+          this.say(phrase('design', this.rng, { thing: this.designing.topic }), { emotion: 'thinking' });
+          this.log(`sat down at the computer to design a ${this.designing.topic}`);
+        } else {
+          this.maybeSay('code', {}, 'thinking', true);
+          this.log('sat down at the computer');
+        }
         if (this.programProvider) {
           const ctx = this.programContext();
           this.pendingProgram = this.programProvider(ctx)
@@ -553,6 +600,16 @@ export class PetSim {
       case 'building':
         if (!this.capabilities.build_copies) return this.setActivity('idle', 2);
         break;
+      case 'resting':
+        p.position.y = WORLD.floorY - Math.min(def.height - 2, 20); // sitting on it
+        this.maybeSay('sit', {}, 'happy');
+        break;
+      case 'organizing':
+        this.log(`started tidying the ${def.label.toLowerCase()}`);
+        break;
+      case 'dressing':
+        this.log(`opened the ${def.label.toLowerCase()}`);
+        break;
     }
     this.setActivity(def.activity, def.duration ?? 5, o.id);
     p.goal = { kind: 'use_object', objectId: o.id, x: p.position.x, reason: 'using' };
@@ -565,7 +622,7 @@ export class PetSim {
       p.position.y = WORLD.floorY;
       return this.setActivity('idle', 1);
     }
-    const def = OBJECT_DEFS[o.kind];
+    const def = defOf(o);
     if (p.activity === 'jumping') {
       p.position.x = o.x + def.width / 2;
       p.position.y = WORLD.floorY - 10; // standing on the mat; the bounce itself is drawn
@@ -608,7 +665,14 @@ export class PetSim {
         if (this.currentBook) this.closeBook();
         else if (a === 'reading') this.maybeSay('read', {}, 'happy');
         else this.maybeSay('movie', {}, 'happy');
-        if (OBJECT_DEFS[o.kind].portable) this.dropCarried();
+        if (defOf(o).portable) this.dropCarried();
+        break;
+      case 'organizing':
+        this.maybeSay('tidy', {}, 'happy', true);
+        this.log(`tidied up the ${defOf(o).label.toLowerCase()} (can carry ${this.resourceCap()} of each thing now)`);
+        break;
+      case 'dressing':
+        this.tryOnOutfit(defOf(o).label);
         break;
       case 'playing':
         if (o.kind === 'plushie') this.tuckInPlushie(o);
@@ -620,10 +684,23 @@ export class PetSim {
         this.buildAtBench();
         break;
       case 'coding': {
-        const raw = this.programResult ?? ruleProgram(this.world.objects, this.dropBox, this.capabilities, p.inventory, this.rng);
+        const idea = this.designing;
+        const fallback = () =>
+          idea
+            ? ruleDesign(idea, this.rng)
+            : ruleProgram(this.world.objects, this.dropBox, this.capabilities, p.inventory, this.rng);
+        const raw = this.programResult ?? fallback();
         this.pendingProgram = null;
         this.programResult = undefined;
         this.runProgram(raw);
+        // The LLM didn't produce a usable design: use the rule designer.
+        if (idea && idea.status === 'researched') this.runProgram(ruleDesign(idea, this.rng), { quiet: true });
+        if (idea && idea.status === 'researched') {
+          // Still no valid design (e.g. the name is taken): let it go rather than loop.
+          idea.status = 'designed';
+          this.log(`couldn't come up with a design for the ${idea.topic}`);
+        }
+        this.designing = undefined;
         break;
       }
       case 'checking_dropbox':
@@ -633,6 +710,7 @@ export class PetSim {
         this.deliverOutbox();
         break;
     }
+    if (a === 'reading' || a === 'coding' || a === 'organizing') this.maybeGetIdea();
     this.setActivity('idle', 1.5 + this.rng() * 3);
   }
 
@@ -640,9 +718,15 @@ export class PetSim {
   // resources, building, drop box, comm box
   // -------------------------------------------------------------------------
 
+  /** How many of each resource Blurb can hold. Storage inventions raise it. */
+  resourceCap(): number {
+    const storage = this.world.objects.filter((o) => o.kind === 'invention' && this.blueprintOf(o)?.behavior === 'storage').length;
+    return BASE_RESOURCE_CAP + STORAGE_BONUS * storage;
+  }
+
   private addResource(r: ResourceKind, n: number) {
     const inv = this.pet.inventory.resources;
-    inv[r] = Math.min(40, (inv[r] ?? 0) + n);
+    inv[r] = Math.min(this.resourceCap(), (inv[r] ?? 0) + n);
   }
 
   private pickUp(o: WorldObject) {
@@ -672,6 +756,15 @@ export class PetSim {
   }
 
   private buildAtBench() {
+    const bp = this.buildableBlueprint();
+    if (bp) {
+      const r = this.runProgram([{ op: 'build', kind: 'invention', blueprint: bp.id }], { quiet: true });
+      if (r.ops.length) {
+        this.say(phrase('invented', this.rng, { thing: bp.name }), { emotion: 'excited' });
+        this.gesture('dance', 3);
+        return;
+      }
+    }
     const raw = ruleProgram(this.world.objects, this.dropBox, { ...this.capabilities, recolor_objects: false, change_skin: false, transform_objects: false, rearrange: false, design_shapes: false }, this.pet.inventory, this.rng);
     const builds = raw.filter((r) => (r as { op?: string }).op === 'build');
     if (builds.length) this.runProgram(builds.slice(0, 1), { quiet: true });
@@ -679,7 +772,7 @@ export class PetSim {
 
   addObject(kind: ObjectKind, x: number, origin: WorldObject['origin'], extra: Partial<WorldObject> = {}): WorldObject | null {
     if (this.world.objects.length >= WORLD.maxObjects) return null;
-    const def = OBJECT_DEFS[kind];
+    const def = defOf({ kind, data: extra.data });
     const cx = clamp(Math.round(x), 0, WORLD.width - def.width);
     const o: WorldObject = {
       id: makeId(kind),
@@ -742,10 +835,12 @@ export class PetSim {
     this.writeNote(text.slice(0, 280));
   }
 
-  private writeNote(text: string, request?: CommNote['request']) {
+  private writeNote(text: string, request?: CommNote['request'], invention?: CommNote['invention']) {
     const note: CommNote = { id: makeId('note'), createdAt: Date.now(), text, request, read: false };
+    if (invention) note.invention = invention;
     this.outbox.push(note);
-    this.log(request ? `wrote an approval request for "${request.design.name}"` : 'wrote a note');
+    const bpName = invention ? this.blueprints.find((b) => b.id === invention.blueprintId)?.name : undefined;
+    this.log(request ? `wrote an approval request for "${request.design.name}"` : bpName ? `wrote an approval request for the ${bpName}` : 'wrote a note');
   }
 
   private deliverOutbox() {
@@ -803,11 +898,15 @@ export class PetSim {
   // -------------------------------------------------------------------------
 
   programContext(): ProgramContext {
+    const d = this.designing;
     return {
       objects: this.world.objects,
       dropBox: this.dropBox,
       capabilities: this.capabilities,
       inventory: this.pet.inventory,
+      knowledge: [...new Set([...this.knowledge, ...this.ideas.filter((i) => i.status === 'researched' && i.learnedTitle).map((i) => i.learnedTitle!)])],
+      blueprints: this.blueprints,
+      design: d?.learnedTitle ? { topic: d.topic, learnedTitle: d.learnedTitle, summary: d.summary } : undefined,
     };
   }
 
@@ -851,9 +950,9 @@ export class PetSim {
         const o = find(op.target);
         if (!o) return '';
         o.color = op.color;
-        burst(o.x + OBJECT_DEFS[o.kind].width / 2);
-        this.log(`painted the ${o.kind} ${op.color}`);
-        return `I painted the ${OBJECT_DEFS[o.kind].label.toLowerCase()}!`;
+        burst(o.x + defOf(o).width / 2);
+        this.log(`painted the ${defOf(o).label.toLowerCase()} ${op.color}`);
+        return `I painted the ${defOf(o).label.toLowerCase()}!`;
       }
       case 'transform': {
         const o = find(op.target);
@@ -871,21 +970,38 @@ export class PetSim {
         const o = find(op.target);
         if (!o) return '';
         o.x = op.x;
-        o.zone = zoneAt(op.x + OBJECT_DEFS[o.kind].width / 2);
-        this.log(`moved the ${o.kind}`);
-        return `Rearranged the ${OBJECT_DEFS[o.kind].label.toLowerCase()}.`;
+        o.zone = zoneAt(op.x + defOf(o).width / 2);
+        this.log(`moved the ${defOf(o).label.toLowerCase()}`);
+        return `Rearranged the ${defOf(o).label.toLowerCase()}.`;
       }
       case 'build': {
-        const def = OBJECT_DEFS[op.kind];
-        for (const [k, n] of Object.entries(def.recipe ?? {})) {
+        const bp = op.blueprint ? this.blueprints.find((b) => b.id === op.blueprint) : undefined;
+        const def = bp ? defOf({ kind: 'invention', data: { blueprintId: bp.id } }) : OBJECT_DEFS[op.kind];
+        const recipe = bp ? bp.recipe : def.recipe ?? {};
+        for (const [k, n] of Object.entries(recipe)) {
           const key = k as ResourceKind;
-          this.pet.inventory.resources[key] = (this.pet.inventory.resources[key] ?? 0) - (n ?? 0);
+          this.pet.inventory.resources[key] = Math.max(0, (this.pet.inventory.resources[key] ?? 0) - (n ?? 0));
         }
-        const o = this.addObject(op.kind, op.x, 'pet', op.color ? { color: op.color } : {});
+        const extra: Partial<WorldObject> = bp ? { data: { blueprintId: bp.id }, color: bp.color } : op.color ? { color: op.color } : {};
+        const o = this.addObject(op.kind, op.x, 'pet', extra);
         if (!o) return '';
         burst(o.x + def.width / 2, WORLD.floorY - 10, 'build');
-        this.log(`built a ${op.kind}`);
-        return phrase('build', this.rng);
+        this.log(bp ? `built the ${bp.name} at the workbench` : `built a ${op.kind}`);
+        return bp ? `I built my ${bp.name}!` : phrase('build', this.rng);
+      }
+      case 'invent': {
+        const d = op.design;
+        this.blueprints.push(d);
+        this.syncBlueprints();
+        const idea = this.ideas.find((i) => i.status === 'researched' && i.learnedTitle?.toLowerCase() === d.learnedFrom.toLowerCase());
+        if (idea) idea.status = 'designed';
+        this.writeNote(
+          `I learned about "${d.learnedFrom}" and designed my own ${d.name}! ${d.description ? `${d.description} ` : ''}It needs ${recipeText(d.recipe)}, and ${BEHAVIOR_DEFS[d.behavior].does}. Can I build it in my workshop?`,
+          undefined,
+          { blueprintId: d.id, status: 'pending' },
+        );
+        this.log(`designed a ${d.name} (learned from "${d.learnedFrom}")`);
+        return `I designed a ${d.name}! I'll ask if I can build it.`;
       }
       case 'set_skin': {
         this.pet.appearance.skinId = op.skin;
@@ -930,7 +1046,7 @@ export class PetSim {
         continue;
       }
       if (source === 'fan' && !['wave', 'dance'].includes(t.action)) continue;
-      if (this.pet.mode === 'overlay' && !['wave', 'dance', 'skin'].includes(t.action)) continue;
+      if (this.pet.mode === 'overlay' && !['wave', 'dance', 'skin', 'invent'].includes(t.action)) continue;
       const byKind = (kinds: ObjectKind[]) => {
         const cands = this.world.objects.filter((o) => kinds.includes(o.kind));
         cands.sort((a, b) => Math.abs(interactionX(a) - this.pet.position.x) - Math.abs(interactionX(b) - this.pet.position.x));
@@ -977,6 +1093,10 @@ export class PetSim {
           break;
         case 'build':
           use(byKind(['workbench']));
+          break;
+        case 'invent':
+          // Only a topic: Blurb still has to read about it, design it, and get approval.
+          if (t.arg) this.addIdea(t.arg, source === 'owner' ? 'owner' : 'self');
           break;
         case 'check_dropbox':
           use(byKind(['drop_box']));
@@ -1080,7 +1200,7 @@ export class PetSim {
       return o;
     }
     const def = OBJECT_DEFS[kind as ObjectKind];
-    if (!def || def.unique) return null;
+    if (!def || def.unique || kind === 'invention') return null;
     const o = this.addObject(kind as ObjectKind, x - def.width / 2, 'owner');
     if (o) {
       this.emit({ type: 'burst', kind: 'build', x: o.x + def.width / 2, y: WORLD.floorY - 10 });
@@ -1102,7 +1222,7 @@ export class PetSim {
   ownerMoveObject(id: string, x: number) {
     const o = this.world.objects.find((v) => v.id === id);
     if (!o) return false;
-    const def = OBJECT_DEFS[o.kind];
+    const def = defOf(o);
     const nx = clamp(Math.round(x - def.width / 2), 0, WORLD.width - def.width);
     o.x = nx;
     o.zone = zoneAt(nx + def.width / 2);
@@ -1157,6 +1277,161 @@ export class PetSim {
   }
 
   // -------------------------------------------------------------------------
+  // inventions: idea → research (tablet) → design (computer) → approval → build
+  // -------------------------------------------------------------------------
+
+  /** Keep the shared registry (used by defOf and the renderer) in sync. */
+  private syncBlueprints() {
+    setBlueprints(this.blueprints.filter((b) => b.status !== 'rejected'));
+  }
+
+  blueprintOf(o: WorldObject): Blueprint | undefined {
+    return o.data?.blueprintId ? this.blueprints.find((b) => b.id === o.data!.blueprintId) : undefined;
+  }
+
+  /** Remember the title of something Blurb finished reading. */
+  private learn(title: string) {
+    const t = title.trim();
+    if (!t) return;
+    this.knowledge = [...this.knowledge.filter((k) => k.toLowerCase() !== t.toLowerCase()), t].slice(-MAX_KNOWLEDGE);
+  }
+
+  /** The idea Blurb should look up next (yours first). */
+  researchIdea(): Idea | undefined {
+    if (!this.capabilities.invent || this.world.clock < this.researchRetryAt) return undefined;
+    const curious = this.ideas.filter((i) => i.status === 'curious');
+    return curious.find((i) => i.source === 'owner') ?? curious[0];
+  }
+
+  /** A researched idea ready for the drawing board (if there's room for another pending design). */
+  designIdea(): Idea | undefined {
+    if (!this.capabilities.invent) return undefined;
+    if (this.blueprints.filter((b) => b.status === 'pending').length >= LIMITS_INVENT.maxPending) return undefined;
+    const ready = this.ideas.filter((i) => i.status === 'researched' && i.learnedTitle);
+    return ready.find((i) => i.source === 'owner') ?? ready[0];
+  }
+
+  /** An approved design that hasn't been built yet. */
+  wantedBlueprint(): Blueprint | undefined {
+    return this.blueprints.find((b) => b.status === 'approved' && !this.world.objects.some((o) => o.data?.blueprintId === b.id));
+  }
+
+  buildableBlueprint(): Blueprint | undefined {
+    if (!this.capabilities.build_copies) return undefined;
+    const b = this.wantedBlueprint();
+    return b && canAfford(this.pet.inventory, b.recipe) ? b : undefined;
+  }
+
+  /** What's still missing for a design, e.g. { stick: 2 }. */
+  missingFor(b: Blueprint | undefined): Partial<Record<ResourceKind, number>> | undefined {
+    if (!b) return undefined;
+    const out: Partial<Record<ResourceKind, number>> = {};
+    for (const [k, n] of Object.entries(b.recipe)) {
+      const have = this.pet.inventory.resources[k as ResourceKind] ?? 0;
+      if (have < (n ?? 0)) out[k as ResourceKind] = (n ?? 0) - have;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  /**
+   * Something to invent. From the owner (chat) or Blurb itself. Only a topic:
+   * what it becomes is decided later, from the fixed menu of behaviors.
+   */
+  addIdea(topic: string, source: 'self' | 'owner'): boolean {
+    if (!this.capabilities.invent) return false;
+    const t = topic.toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (t.length < 3 || findProfanity(t).length) return false;
+    const known = (n: string) => n.toLowerCase() === t;
+    if (this.ideas.some((i) => i.status !== 'designed' && known(i.topic))) return false;
+    if (this.blueprints.some((b) => b.status !== 'rejected' && known(b.name))) return false;
+    if (Object.values(OBJECT_DEFS).some((d) => known(d.label))) return false;
+    const open = this.ideas.filter((i) => i.status !== 'designed');
+    if (open.length >= LIMITS_INVENT.maxIdeas) {
+      // Make room by forgetting the oldest idea of Blurb's own; yours stay.
+      const drop = open.find((i) => i.source === 'self');
+      if (!drop || source === 'self') return false;
+      this.ideas = this.ideas.filter((i) => i !== drop);
+    }
+    this.ideas = [...this.ideas.filter((i) => i.status !== 'designed').slice(-(LIMITS_INVENT.maxIdeas - 1)), { topic: t, status: 'curious', source, addedAt: Date.now() }];
+    this.log(source === 'owner' ? `owner asked Blurb to invent a ${t}` : `had an idea: a ${t}`);
+    return true;
+  }
+
+  /** Every so often, Blurb notices something it could use and wants to invent it. */
+  private maybeGetIdea() {
+    if (!this.capabilities.invent || this.ideas.some((i) => i.status !== 'designed' && i.source === 'self')) return;
+    if (this.rng() > 0.25) return;
+    const t = selfIdea(
+      {
+        inventory: this.pet.inventory,
+        cap: this.resourceCap(),
+        skins: this.dropBox.skins.length,
+        books: this.knowledge.length,
+        // Includes declined designs: Blurb doesn't re-propose what you said no to.
+        has: (name) => this.blueprints.some((b) => b.name.toLowerCase() === name),
+      },
+      this.rng,
+    );
+    if (t && this.addIdea(t, 'self')) this.say(phrase('idea', this.rng, { thing: t }), { emotion: 'thinking' });
+  }
+
+  private researchFailed(idea: Idea) {
+    this.researchRetryAt = this.world.clock + RESEARCH_RETRY_SEC;
+    idea.tries = (idea.tries ?? 0) + 1;
+    if (idea.tries === 3)
+      this.writeNote(
+        `I want to invent a ${idea.topic}, but I couldn't look it up on my tablet. Is reading switched on in my settings (Wikipedia or real books)? I'll keep trying.`,
+      );
+  }
+
+  private tryOnOutfit(where: string) {
+    const others = this.dropBox.skins.filter((s) => s.id !== this.pet.appearance.skinId);
+    if (!this.capabilities.change_skin || !others.length) {
+      this.maybeSay('tidy', {}, 'happy');
+      return;
+    }
+    const s = others[Math.floor(this.rng() * others.length)];
+    this.pet.appearance.skinId = s.id;
+    this.emit({ type: 'burst', kind: 'magic', x: this.pet.position.x, y: this.pet.position.y - 20 });
+    this.say(`Trying on ${s.name} from my ${where.toLowerCase()}!`, { emotion: 'excited' });
+    this.log(`changed into the ${s.name} skin at the ${where.toLowerCase()}`);
+  }
+
+  /** Owner decides on an invention waiting in the comm box. */
+  decideInvention(noteId: string, approve: boolean): boolean {
+    const note = this.notes.find((n) => n.id === noteId);
+    const inv = note?.invention;
+    if (!note || !inv || inv.status !== 'pending') return false;
+    const bp = this.blueprints.find((b) => b.id === inv.blueprintId);
+    if (!bp) return false;
+    inv.status = approve ? 'approved' : 'rejected';
+    inv.decidedAt = Date.now();
+    bp.status = inv.status;
+    note.read = true;
+    this.syncBlueprints();
+    if (approve) {
+      this.gesture('dance', 3);
+      this.log(`owner approved the ${bp.name}`);
+      const missing = this.missingFor(bp);
+      if (!missing) this.say(`Yay! I'm going to build my ${bp.name}!`, { emotion: 'excited' });
+      else {
+        const forageable = Object.keys(missing).filter((k) => ['stick', 'leaf', 'berry'].includes(k));
+        const ask = Object.fromEntries(Object.entries(missing).filter(([k]) => !forageable.includes(k)));
+        this.say(`Yay! I still need ${recipeText(missing)} for my ${bp.name}.`, { emotion: 'excited' });
+        if (Object.keys(ask).length)
+          this.writeNote(
+            `To build my ${bp.name} I still need ${recipeText(ask)}.${forageable.length ? ` I'll gather the ${forageable.join(' and ')} myself!` : ''} Could you put some in my drop box? (Or I'll keep an eye out in the yard.)`,
+          );
+      }
+    } else {
+      this.say(phrase('rejected', this.rng), { emotion: 'sad' });
+      this.log(`owner declined the ${bp.name}`);
+    }
+    this.syncBadges();
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
   // the bigger world + playground
   // -------------------------------------------------------------------------
 
@@ -1165,7 +1440,7 @@ export class PetSim {
     const shift = WORLD.legacyShift;
     for (const o of this.world.objects) {
       o.x += shift;
-      o.zone = zoneAt(o.x + (OBJECT_DEFS[o.kind]?.width ?? 0) / 2);
+      o.zone = zoneAt(o.x + (defOf(o)?.width ?? 0) / 2);
     }
     this.pet.position.x += shift;
     if (this.pet.goal) this.pet.goal.x += shift;
@@ -1215,7 +1490,8 @@ export class PetSim {
     const p = this.pet;
     p.inventory.carrying = o.id;
     o.data = { ...o.data, carried: true };
-    const mode = this.tabletMode ?? (p.needs.boredom > p.needs.curiosity ? 'watch' : 'read');
+    // Researching an idea always means reading.
+    const mode = this.tabletMode ?? (this.researchIdea() ? 'read' : p.needs.boredom > p.needs.curiosity ? 'watch' : 'read');
     this.tabletMode = undefined;
     // Cozy spots: the rug, the end of the bed, under the tree.
     const spots: number[] = [];
@@ -1233,23 +1509,32 @@ export class PetSim {
   private startTablet(mode: 'read' | 'watch') {
     const o = this.carriedObject();
     if (!o) return this.setActivity('idle', 1);
-    const def = OBJECT_DEFS[o.kind];
+    const def = defOf(o);
     this.setActivity(mode === 'watch' ? 'watching' : 'reading', def.duration ?? 20, o.id);
     this.pet.goal = { kind: 'use_object', objectId: o.id, x: this.pet.position.x, reason: 'using' };
     if (mode === 'watch') return this.log('started a movie on the tablet');
-    if (!this.articleProvider) return this.openBook('tablet');
+    if (!this.articleProvider) {
+      if (this.researchIdea()) this.researchFailed(this.researchIdea()!);
+      return this.openBook('tablet');
+    }
     const tabletId = o.id;
     const stillReading = () => this.pet.activity === 'reading' && this.pet.inventory.carrying === tabletId && !this.currentBook;
-    this.articleProvider()
+    const idea = this.researchIdea();
+    const failed = () => {
+      if (idea) this.researchFailed(idea);
+      if (stillReading()) this.openBook('tablet');
+    };
+    if (idea) this.log(`looked up "${idea.topic}" on the tablet`);
+    this.articleProvider(idea?.topic)
       .then((a) => {
         if (!stillReading()) return;
-        if (!a) return this.openBook('tablet');
-        this.currentBook = { book: a, via: 'tablet' };
+        if (!a) return failed();
+        this.currentBook = { book: a, via: 'tablet', idea: idea?.topic };
         this.pet.book = { title: a.title, author: a.author };
-        this.log(`started reading about "${a.title}" on the tablet`);
+        this.log(`started reading about "${a.title}" on the tablet${idea ? ` (researching a ${idea.topic})` : ''}`);
         this.emit({ type: 'book', phase: 'start', book: a, via: 'tablet' });
       })
-      .catch(() => stillReading() && this.openBook('tablet'));
+      .catch(failed);
   }
 
   /** Put down whatever Blurb is carrying, right where it is. */
@@ -1258,15 +1543,15 @@ export class PetSim {
     this.pet.inventory.carrying = undefined;
     if (!o) return;
     o.data = { ...o.data, carried: undefined };
-    o.x = Math.round(clamp(this.pet.position.x + (this.pet.facing === 'right' ? 6 : -16), 0, WORLD.width - OBJECT_DEFS[o.kind].width));
-    o.zone = zoneAt(o.x + OBJECT_DEFS[o.kind].width / 2);
+    o.x = Math.round(clamp(this.pet.position.x + (this.pet.facing === 'right' ? 6 : -16), 0, WORLD.width - defOf(o).width));
+    o.zone = zoneAt(o.x + defOf(o).width / 2);
     if (this.currentBook?.via === 'tablet') this.closeBook(false);
   }
 
   /** Keep a carried object with Blurb. */
   private followCarried() {
     const o = this.carriedObject();
-    if (o) o.x = Math.round(this.pet.position.x - OBJECT_DEFS[o.kind].width / 2);
+    if (o) o.x = Math.round(this.pet.position.x - defOf(o).width / 2);
   }
 
   // -------------------------------------------------------------------------
@@ -1332,6 +1617,16 @@ export class PetSim {
     if (!cur || !finished) return;
     cur.book.read = true;
     this.log(`finished reading "${cur.book.title}"`);
+    this.learn(cur.book.title);
+    if (cur.idea) {
+      const idea = this.ideas.find((i) => i.topic === cur.idea && i.status === 'curious');
+      if (idea) {
+        idea.status = 'researched';
+        idea.learnedTitle = cur.book.title;
+        idea.summary = cur.book.blurb?.slice(0, 300);
+        this.log(`learned enough about "${cur.book.title}" to design a ${idea.topic}`);
+      }
+    }
     this.emit({ type: 'book', phase: 'finish', book: cur.book, via: cur.via });
   }
 

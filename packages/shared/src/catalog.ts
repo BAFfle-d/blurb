@@ -189,6 +189,10 @@ export const OBJECT_DEFS: Record<ObjectKind, ObjectDef> = {
     activity: 'playing', duration: 8, effect: { boredom: -4, social: -1 },
     family: 'toy', recipe: { bioplastic: 1 },
   },
+  invention: {
+    // Placeholder: real size/behavior come from the approved blueprint (see blueprints.ts).
+    kind: 'invention', label: 'Invention', width: 20, height: 16, defaultColor: '#a0703c', zones: ['house', 'yard'],
+  },
   resource: {
     kind: 'resource', label: 'Resource', width: 6, height: 5, defaultColor: '#a0703c', zones: ['house', 'yard'],
   },
@@ -309,6 +313,7 @@ export const DEFAULT_CAPABILITIES: CapabilitySet = {
   sit_on_windows: true,
   screen_questions: true,
   jump: true,
+  invent: true,
 };
 
 export const CAPABILITY_LABELS: Record<keyof CapabilitySet, string> = {
@@ -326,6 +331,7 @@ export const CAPABILITY_LABELS: Record<keyof CapabilitySet, string> = {
   sit_on_windows: 'Sit on top of app windows',
   screen_questions: 'Answer questions about a screenshot you share',
   jump: 'Jump on the trampoline and play on the slide',
+  invent: 'Invent new things after learning about them (you approve every design)',
 };
 
 export const DEFAULT_PERSONA = `You are {name}, a small, glossy, squishy blob who lives in a cozy pixel house with a little yard.
